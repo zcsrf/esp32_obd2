@@ -343,7 +343,7 @@ int OBD2Class::begin()
   // first try standard addressing
   _useExtendedAddressing = false;
   CAN0.watchFor(0x7e8);
-/*
+
   if (!supportedPidsRead()) {
     // next try extended addressing
     _useExtendedAddressing = true;
@@ -353,7 +353,7 @@ int OBD2Class::begin()
       return 0;
     }
   }
-*/
+
   return 1;
 }
 
@@ -365,7 +365,6 @@ void OBD2Class::end()
 
 bool OBD2Class::pidSupported(uint8_t pid)
 {
-  return true; //////////////////////////////////////////////////////////////////////
   if (pid == 0) {
     return true;
   }
@@ -709,42 +708,42 @@ int OBD2Class::pidRead(uint8_t mode, uint8_t pid, void* data, int length)
         for (uint8_t i=0; i<length; i++) {
 		  ((uint8_t*)data)[i] = incoming.data.uint8[i+3];
 		}
-        return incoming.length;
+        return length;
       }
 
+
+      // Is multiple packets
+      if (incoming.data.uint8[0] == 0x10) {
+        int read = 0;
+
+        // Get first packet
+		//////// Why only read three of the remaining six bytes in the first packet: 
+		//////// int read = CAN.readBytes((uint8_t*)data, 3); 
+        while (read<3) {	
+	  	  ((uint8_t*)data)[read] = incoming.data.uint8[read+2];
+		  read++;
+        }
+				
+		// Loop through rest of multiple packets
+        for (int pck = 0; read<length; pck++) {
+          delay(60);
+		  
+          // send the request for the next chunk
+          outgoing.data.uint8[0] = 0x30;  
+          CAN0.sendFrame(outgoing);
 		
-/* no multi packet support yet
+          // wait for (proper) response
+          while ( CAN0.read(incoming) != 0 || incoming.data.uint8[0] != (0x21 + pck)); // correct sequence number
 
-     if  incoming.data.uint8[0] == 0x10 && CAN0.read()
-
-      int read = CAN0.readBytes((uint8_t*)data, 3);
-
-      for (int i = 0; read < length; i++) {
-        delay(60);
-
-        // send the request for the next chunk
-        if (_useExtendedAddressing) {
-          CAN0.beginExtendedPacket(0x18db33f1, 8);
-        } else {
-          CAN0.beginPacket(0x7df, 8);
+          // Something recieved
+		  for (uint8_t i=0; i<7 && read<length; i++) {
+	        ((uint8_t*)data)[read++] = incoming.data.uint8[i+1];
+		  }
         }
-        CAN0.write(0x30);
-        CAN0.endPacket();
 
-        // wait for response
-        while (CAN0.parsePacket() == 0 ||
-               CAN0.read() != (0x21 + i)); // correct sequence number
-
-        while (CAN0.available()) {
-          ((uint8_t*)data)[read++] = CAN0.read();
-        }
-      }
-
-      _lastPidResponseMillis = millis();
-
-      return read;
-*/
-
+        _lastPidResponseMillis = millis();
+        return read;
+	  }
     }
   }
   return 0;
