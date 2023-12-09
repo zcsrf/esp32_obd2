@@ -1,8 +1,8 @@
 // Copyright (c) Sandeep Mistry. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-#ifndef OBD2_H
-#define OBD2_H
+#ifndef ESP32_OBD2_H
+#define ESP32_OBD2_H
 
 enum {
   PIDS_SUPPORT_01_20                                = 0x00,
