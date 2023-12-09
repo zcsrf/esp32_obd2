@@ -1,8 +1,11 @@
 // Copyright (c) Sandeep Mistry. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-#include <CAN.h> // the OBD2 library depends on the CAN library
-#include <OBD2.h>
+#include <esp32_can.h> // the ESP32_OBD2 library depends on the https://github.com/collin80/esp32_can and https://github.com/collin80/can_common CAN libraries
+#include <esp32_obd2.h>
+
+#define CAN_RX_PIN  13
+#define CAN_TX_PIN  14
 
 // array of PID's to print values of
 const int PIDS[] = {
@@ -23,11 +26,12 @@ const int PIDS[] = {
 const int NUM_PIDS = sizeof(PIDS) / sizeof(PIDS[0]);
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
   while (!Serial);
 
   Serial.println(F("OBD2 Key Stats"));
 
+  CAN0.setCANPins((gpio_num_t)CAN_RX_PIN, (gpio_num_t)CAN_TX_PIN);
   while (true) {
     Serial.print(F("Attempting to connect to OBD2 CAN bus ... "));
 
