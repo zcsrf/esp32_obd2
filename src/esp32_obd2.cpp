@@ -705,12 +705,10 @@ int OBD2Class::pidRead(uint8_t mode, uint8_t pid, void* data, int length)
 	if ( CAN0.read(incoming) != 0 ) {
       _lastPidResponseMillis = millis();
 
-
       if (!splitResponse && incoming.data.uint8[1] == (mode | 0x40) && incoming.data.uint8[2] == pid) {
         for (uint8_t i=0; i<length; i++) {
 		  ((uint8_t*)data)[i] = incoming.data.uint8[i+3];
 		}
-		//*(uint8_t*)data = incoming.data.uint8[3];
         return incoming.length;
       }
 
