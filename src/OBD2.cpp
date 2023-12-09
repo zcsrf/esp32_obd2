@@ -2,16 +2,11 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 #include <math.h>
+#include <esp32_can.h>
+#include "esp32_obd2.h"
 
-#ifdef __AVR__
-#include <avr/pgmspace.h>
-#else
 #define PROGMEM
-#endif
 
-#include <CAN.h>
-
-#include "OBD2.h"
 
 const char PID_NAME_0x00[] PROGMEM = "PIDs supported [01 - 20]";
 const char PID_NAME_0x01[] PROGMEM = "Monitor status since DTCs cleared";
@@ -339,7 +334,7 @@ OBD2Class::~OBD2Class()
 
 int OBD2Class::begin()
 {
-  if (!CAN.begin(500E3)) {
+  if (!CAN0.begin(CAN_BPS_500K)) {
     return 0;
   }
 
@@ -347,28 +342,30 @@ int OBD2Class::begin()
 
   // first try standard addressing
   _useExtendedAddressing = false;
-  CAN.filter(0x7e8);
+  CAN0.watchFor(0x7e8);
+/*
   if (!supportedPidsRead()) {
     // next try extended addressing
     _useExtendedAddressing = true;
-    CAN.filterExtended(0x18daf110);
+    CAN0.watchFor(0x18daf110);
 
     if (!supportedPidsRead()) {
       return 0;
     }
   }
-
+*/
   return 1;
 }
 
 
 void OBD2Class::end()
 {
-  CAN.end();
+//  CAN0.end();
 }
 
 bool OBD2Class::pidSupported(uint8_t pid)
 {
+  return true; //////////////////////////////////////////////////////////////////////
   if (pid == 0) {
     return true;
   }
@@ -405,21 +402,7 @@ String OBD2Class::pidName(uint8_t pid)
   if (pid > 0x5f) {
     return "Unknown";
   }
-
-#ifdef __AVR__
-  const char* pgmName = pgm_read_ptr(&PID_NAME_MAPPER[pid]);
-  String name;
-
-  if (pgmName != NULL) {
-    while (char c = pgm_read_byte(pgmName++)) {
-      name += c;
-    }
-  }
-
-  return name;
-#else
   return PID_NAME_MAPPER[pid];
-#endif
 }
 
 String OBD2Class::pidUnits(uint8_t pid)
@@ -428,20 +411,7 @@ String OBD2Class::pidUnits(uint8_t pid)
     return "";
   }
 
-#ifdef __AVR__
-  const char* pgmUnits = pgm_read_ptr(&PID_UNIT_MAPPER[pid]);
-  String units;
-
-  if (pgmUnits != NULL) {
-    while (char c = pgm_read_byte(pgmUnits++)) {
-      units += c;
-    }
-  }
-
-  return units;
-#else
   return PID_UNIT_MAPPER[pid];
-#endif
 }
 
 float OBD2Class::pidRead(uint8_t pid)
@@ -695,34 +665,6 @@ int OBD2Class::supportedPidsRead()
   return 1;
 }
 
-int OBD2Class::clearAllStoredDTC()
-{
-    //Function clears stored Diagnostic Trouble Codes (DTC)
-
-    // make sure at least 60 ms have passed since the last response
-    unsigned long lastResponseDelta = millis() - _lastPidResponseMillis;
-    if (lastResponseDelta < 60) {
-        delay(60 - lastResponseDelta);
-    }
-
-    for (int retries = 10; retries > 0; retries--) {
-        if (_useExtendedAddressing) {
-            CAN.beginExtendedPacket(0x18db33f1, 8);
-        } else {
-            CAN.beginPacket(0x7df, 8);
-        }
-        CAN.write(0x00); // number of additional bytes
-        CAN.write(0x04); // Mode / Service 4, for clearing DTC
-        if (CAN.endPacket()) {
-            // send success
-            break;
-        } else if (retries <= 1) {
-            return 0;
-        }
-    }
-
-    return 1;
-}
 
 int OBD2Class::pidRead(uint8_t mode, uint8_t pid, void* data, int length)
 {
@@ -732,16 +674,22 @@ int OBD2Class::pidRead(uint8_t mode, uint8_t pid, void* data, int length)
     delay(60 - lastResponseDelta);
   }
 
+  CAN_FRAME outgoing;
+  outgoing.id = 0x7df;
+  outgoing.length = 8;
+  outgoing.extended = 0;
+  outgoing.rtr = 0;
+  outgoing.data.uint8[0] = 0x02;  
+  outgoing.data.uint8[1] = mode;  
+  outgoing.data.uint8[2] = pid; 
+  outgoing.data.uint8[3] = 0x00;
+  outgoing.data.uint8[4] = 0x00;  
+  outgoing.data.uint8[5] = 0x00;  
+  outgoing.data.uint8[6] = 0x00;  
+  outgoing.data.uint8[7] = 0x00;  
+
   for (int retries = 10; retries > 0; retries--) {
-    if (_useExtendedAddressing) {
-      CAN.beginExtendedPacket(0x18db33f1, 8);
-    } else {
-      CAN.beginPacket(0x7df, 8);
-    }
-    CAN.write(0x02); // number of additional bytes
-    CAN.write(mode);
-    CAN.write(pid);
-    if (CAN.endPacket()) {
+    if (CAN0.sendFrame(outgoing)) {
       // send success
       break;
     } else if (retries <= 1) {
@@ -751,47 +699,56 @@ int OBD2Class::pidRead(uint8_t mode, uint8_t pid, void* data, int length)
 
   bool splitResponse = (length > 5);
 
+  CAN_FRAME incoming;
   for (unsigned long start = millis(); (millis() - start) < _responseTimeout;) {
-    if (CAN.parsePacket() != 0 &&
-          (splitResponse ? (CAN.read() == 0x10 && CAN.read()) : CAN.read()) &&
-          (CAN.read() == (mode | 0x40) && CAN.read() == pid)) {
-
+    
+	if ( CAN0.read(incoming) != 0 ) {
       _lastPidResponseMillis = millis();
 
-      // got a response
-      if (!splitResponse) {
-        return CAN.readBytes((uint8_t*)data, length);
+
+      if (!splitResponse && incoming.data.uint8[1] == (mode | 0x40) && incoming.data.uint8[2] == pid) {
+        for (uint8_t i=0; i<length; i++) {
+		  ((uint8_t*)data)[i] = incoming.data.uint8[i+3];
+		}
+		//*(uint8_t*)data = incoming.data.uint8[3];
+        return incoming.length;
       }
 
-      int read = CAN.readBytes((uint8_t*)data, 3);
+		
+/* no multi packet support yet
+
+     if  incoming.data.uint8[0] == 0x10 && CAN0.read()
+
+      int read = CAN0.readBytes((uint8_t*)data, 3);
 
       for (int i = 0; read < length; i++) {
         delay(60);
 
         // send the request for the next chunk
         if (_useExtendedAddressing) {
-          CAN.beginExtendedPacket(0x18db33f1, 8);
+          CAN0.beginExtendedPacket(0x18db33f1, 8);
         } else {
-          CAN.beginPacket(0x7df, 8);
+          CAN0.beginPacket(0x7df, 8);
         }
-        CAN.write(0x30);
-        CAN.endPacket();
+        CAN0.write(0x30);
+        CAN0.endPacket();
 
         // wait for response
-        while (CAN.parsePacket() == 0 ||
-               CAN.read() != (0x21 + i)); // correct sequence number
+        while (CAN0.parsePacket() == 0 ||
+               CAN0.read() != (0x21 + i)); // correct sequence number
 
-        while (CAN.available()) {
-          ((uint8_t*)data)[read++] = CAN.read();
+        while (CAN0.available()) {
+          ((uint8_t*)data)[read++] = CAN0.read();
         }
       }
 
       _lastPidResponseMillis = millis();
 
       return read;
+*/
+
     }
   }
-
   return 0;
 }
 
