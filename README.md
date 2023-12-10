@@ -1,4 +1,4 @@
-# Arduino OBD2
+# Arduino ESP32 OBD2
 
 An Arduino library for reading OBD-II data from your car over CAN bus. 
 
