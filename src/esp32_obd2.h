@@ -103,12 +103,35 @@ enum {
   FUEL_INJECTION_TIMING                             = 0x5d,
   ENGINE_FUEL_RATE                                  = 0x5e,
   EMISSION_REQUIREMENT_TO_WHICH_VEHICLE_IS_DESIGNED = 0x5f,
+  ENGINE_REF_TORQUE                                 = 0x63,
 
   // more PIDs can be added from: https://en.wikipedia.org/wiki/OBD-II_PIDs
 };
 
+enum BMW{
+  ADV_ENGINE_RPM                                    = 0x1881,
+  ENGINE_TORQUE                                     = 0x07D1,
+  THROTTLE_VALVE                                    = 0x0045,
+  INJECTION_VOLUME                                  = 0x04B0, // mm^3/inj
+  BOOST_PRESSURE_ABS                                = 0x076D,
+  AMBIENT_PRESSURE_ABS                              = 0x0C1C,
+  BATTERY_VOLTAGE                                   = 0x012C,
+  COOLANT_TEMPERATURE                               = 0x0547,
+  OIL_TEMPERATURE                                   = 0x0458,
+  BOOST_TEMPERATURE                                 = 0x076F,
+  AMBIENT_TEMPERATURE                               = 0x0FD2,
+  FUEL_LITERS                                       = 0x0384,
+  DPF_REGEN_COUNT                                   = 0x0407,
+  DPF_LIFETIME                                      = 0x0BA4,
+  DPF_REGEN_STATUS                                  = 0x05AA,
+  DPF_ASH_WEIGHT                                    = 0x03E9, // Doesn't burn
+  DPF_SOOT_WEIGHT                                   = 0x03EA, // Does burn
+  DPF_PRESSURE_DIFF                                 = 0x0424,
+  DPF_TEMPERATURE                                   = 0x0434,
+} ;
+
 // default timeout for a response in milliseconds
-#define OBD2_DEFAULT_TIMEOUT 2000
+#define OBD2_DEFAULT_TIMEOUT 25
 
 class OBD2Class {
 public:
@@ -118,14 +141,17 @@ public:
   int begin();
   void end();
 
-  bool pidSupported(uint8_t pid);
   bool pidValueRaw(uint8_t pid);
-  String pidName(uint8_t pid);
-  String pidUnits(uint8_t pid);
+  bool pidSupported(uint8_t pid);
 
   float pidRead(uint8_t pid);
   uint32_t pidReadRaw(uint8_t pid);
-
+  // This is related to BMW PID
+  // follows the following logic
+  // mode: 2c
+  // pid: 0x10 pid_h, pid_l;
+  float pidBmw(uint16_t pid);
+  uint32_t pidBmwRaw(uint16_t pid);
   String vinRead();
   String ecuNameRead();
 
@@ -135,14 +161,13 @@ public:
 
 private:
   int supportedPidsRead();
-
   int pidRead(uint8_t mode, uint8_t pid, void* data, int length);
-
+  int pidBmwRead(uint8_t mode, uint32_t advanced_pid, void* data, int length);
 private:
   unsigned long _responseTimeout;
   bool _useExtendedAddressing;
   unsigned long _lastPidResponseMillis;
-  uint32_t _supportedPids[32];
+    uint32_t _supportedPids[32];
 };
 
 extern OBD2Class OBD2;
