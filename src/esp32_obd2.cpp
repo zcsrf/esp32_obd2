@@ -26,6 +26,8 @@ int OBD2Class::begin()
   _useExtendedAddressing = true;
   CAN0.watchFor(0x7e8);
   CAN0.watchFor(0x18daf110);
+
+  return 1;
 }
 
 void OBD2Class::end()
