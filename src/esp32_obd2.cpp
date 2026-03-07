@@ -60,7 +60,7 @@ bool OBD2Class::pidValueRaw(uint8_t pid)
   }
 }
 
-float OBD2Class::pidRead(uint8_t pid)
+inline float OBD2Class::pidRead(uint8_t pid)
 {
 
 #define A value[0]
@@ -74,6 +74,10 @@ float OBD2Class::pidRead(uint8_t pid)
     return NAN;
   }
 
+  // Precompute 16-bit and 32-bit values once
+  uint16_t raw16 = ((uint16_t)A << 8) | B;
+  uint32_t raw32 = ((uint32_t)A << 24) | ((uint32_t)B << 16) | ((uint32_t)C << 8) | D;
+
   switch (pid)
   {
   default:
@@ -84,7 +88,7 @@ float OBD2Class::pidRead(uint8_t pid)
   case PIDS_SUPPORT_41_60:                // raw
   case MONITOR_STATUS_THIS_DRIVE_CYCLE:   // raw
     // NOTE: return value can lose precision!
-    return ((uint32_t)A << 24 | (uint32_t)B << 16 | (uint32_t)C << 8 | (uint32_t)D);
+    return (float)raw32;
 
   case FUEL_SYSTEM_STATUS: // raw
   case RUN_TIME_SINCE_ENGINE_START:
@@ -93,7 +97,7 @@ float OBD2Class::pidRead(uint8_t pid)
   case TIME_RUN_WITH_MIL_ON:
   case ENGINE_REF_TORQUE:
   case TIME_SINCE_TROUBLE_CODES_CLEARED:
-    return (A * 256.0 + B);
+    return (float)raw16;
 
   case CALCULATED_ENGINE_LOAD:
   case THROTTLE_POSITION:
@@ -110,7 +114,7 @@ float OBD2Class::pidRead(uint8_t pid)
   case ETHANOL_FUEL_PERCENTAGE:
   case RELATIVE_ACCELERATOR_PEDAL_POSITTION:
   case HYBRID_BATTERY_PACK_REMAINING_LIFE:
-    return (A / 2.55);
+    return (A / 2.55f);
 
   case COMMANDED_SECONDARY_AIR_STATUS:                    // raw
   case OBD_STANDARDS_THIS_VEHICLE_CONFORMS_TO:            // raw
@@ -129,46 +133,45 @@ float OBD2Class::pidRead(uint8_t pid)
   case OXYGEN_SENSOR_6_SHORT_TERM_FUEL_TRIM:
   case OXYGEN_SENSOR_7_SHORT_TERM_FUEL_TRIM:
   case OXYGEN_SENSOR_8_SHORT_TERM_FUEL_TRIM:
-    return ((B / 1.28) - 100.0);
-    break;
+    return ((B / 1.28f) - 100.0f);
 
   case ENGINE_COOLANT_TEMPERATURE:
   case AIR_INTAKE_TEMPERATURE:
   case AMBIENT_AIR_TEMPERATURE:
   case ENGINE_OIL_TEMPERATURE:
-    return (A - 40.0);
+    return (A - 40.0f);
 
   case SHORT_TERM_FUEL_TRIM_BANK_1:
   case LONG_TERM_FUEL_TRIM_BANK_1:
   case SHORT_TERM_FUEL_TRIM_BANK_2:
   case LONG_TERM_FUEL_TRIM_BANK_2:
   case EGR_ERROR:
-    return ((A / 1.28) - 100.0);
+    return ((A / 1.28f) - 100.0f);
 
   case FUEL_PRESSURE:
-    return (A * 3.0);
+    return (A * 3.0f);
 
   case INTAKE_MANIFOLD_ABSOLUTE_PRESSURE:
   case VEHICLE_SPEED:
   case WARM_UPS_SINCE_CODES_CLEARED:
   case ABSOLULTE_BAROMETRIC_PRESSURE:
-    return (A);
+    return (float)A;
 
   case ENGINE_RPM:
-    return ((A * 256.0 + B) / 4.0);
+    return (raw16 / 4.0f);
 
   case TIMING_ADVANCE:
-    return ((A / 2.0) - 64.0);
+    return ((A / 2.0f) - 64.0f);
 
   case MAF_AIR_FLOW_RATE:
-    return ((A * 256.0 + B) / 100.0);
+    return (raw16 / 100.0f);
 
   case FUEL_RAIL_PRESSURE:
-    return ((A * 256.0 + B) * 0.079);
+    return (raw16 * 0.079f);
 
   case FUEL_RAIL_GAUGE_PRESSURE:
   case FUEL_RAIL_ABSOLUTE_PRESSURE:
-    return ((A * 256.0 + B) * 10.0);
+    return (raw16 * 10.0f);
 
   case OXYGEN_SENSOR_1_FUEL_AIR_EQUIVALENCE_RATIO:
   case OXYGEN_SENSOR_2_FUEL_AIR_EQUIVALENCE_RATIO:
@@ -186,37 +189,37 @@ float OBD2Class::pidRead(uint8_t pid)
   case 0x39:
   case 0x3a:
   case 0x3b:
-    return (((A * 256.0 + B) * 2.0) / 65536.0);
+    return ((raw16 * 2.0f) / 65536.0f);
 
   case EVAP_SYSTEM_VAPOR_PRESSURE:
-    return (((int16_t)(A * 256.0 + B)) / 4.0);
+    return (((int16_t)raw16) / 4.0f);
 
   case CATALYST_TEMPERATURE_BANK_1_SENSOR_1:
   case CATALYST_TEMPERATURE_BANK_2_SENSOR_1:
   case CATALYST_TEMPERATURE_BANK_1_SENSOR_2:
   case CATALYST_TEMPERATURE_BANK_2_SENSOR_2:
-    return (((A * 256.0 + B) / 10.0) - 40.0);
+    return ((raw16 / 10.0f) - 40.0f);
 
   case CONTROL_MODULE_VOLTAGE:
-    return ((A * 256.0 + B) / 1000.0);
+    return (raw16 / 1000.0f);
 
   case ABSOLUTE_LOAD_VALUE:
-    return ((A * 256.0 + B) / 2.55);
+    return (raw16 / 2.55f);
 
   case FUEL_AIR_COMMANDED_EQUIVALENCE_RATE:
-    return (2.0 * (A * 256.0 + B) / 65536.0);
+    return (2.0f * raw16 / 65536.0f);
 
   case ABSOLUTE_EVAP_SYSTEM_VAPOR_PRESSURE:
-    return ((A * 256.0 + B) / 200.0);
+    return (raw16 / 200.0f);
 
   case 0x54:
-    return ((A * 256.0 + B) - 32767.0);
+    return ((float)raw16 - 32767.0f);
 
   case FUEL_INJECTION_TIMING:
-    return (((A * 256.0 + B) / 128.0) - 210.0);
+    return ((raw16 / 128.0f) - 210.0f);
 
   case ENGINE_FUEL_RATE:
-    return ((A * 256.0 + B) / 20.0);
+    return (raw16 / 20.0f);
   }
 }
 
@@ -235,7 +238,7 @@ String OBD2Class::vinRead()
   return vin;
 }
 
-uint32_t OBD2Class::pidReadRaw(uint8_t pid)
+inline uint32_t OBD2Class::pidReadRaw(uint8_t pid)
 {
 
 #define A value[0]
@@ -249,6 +252,10 @@ uint32_t OBD2Class::pidReadRaw(uint8_t pid)
     return 0;
   }
 
+  // Precompute commonly used values
+  uint16_t raw16 = ((uint16_t)A << 8) | B;
+  uint32_t raw32 = ((uint32_t)A << 24) | ((uint32_t)B << 16) | ((uint32_t)C << 8) | D;
+
   switch (pid)
   {
   case COMMANDED_SECONDARY_AIR_STATUS:
@@ -258,17 +265,17 @@ uint32_t OBD2Class::pidReadRaw(uint8_t pid)
   case AUXILIARY_INPUT_STATUS:
   case FUEL_TYPE:
   case EMISSION_REQUIREMENT_TO_WHICH_VEHICLE_IS_DESIGNED:
-    return (A);
+    return (uint32_t)A;
 
   case FUEL_SYSTEM_STATUS:
-    return ((uint32_t)A << 8 | (uint32_t)B);
+    return raw16;
 
   default:
-    return ((uint32_t)A << 24 | (uint32_t)B << 16 | (uint32_t)C << 8 | (uint32_t)D);
+    return raw32;
   }
 }
 
-double OBD2Class::pidBmw(uint16_t pid)
+float OBD2Class::pidBmw(uint16_t pid)
 {
 #define A value[0]
 #define B value[1]
@@ -281,68 +288,63 @@ double OBD2Class::pidBmw(uint16_t pid)
     return NAN;
   }
 
-  double math;
+  // Precompute 16-bit and 32-bit values once
+  uint16_t raw16 = ((uint16_t)A << 8) | B;
+  uint32_t raw32 = ((uint32_t)A << 24) | ((uint32_t)B << 16) | ((uint32_t)C << 8) | D;
+
   switch (pid)
   {
   case VEHICLE_SPEED_ALT:
-    math = (A * 256 + B) * 0.004578;
-    return math;
+    return raw16 * 0.004578f;
   case ACC_FUEL_AMOUNT:
   case ADV_ENGINE_RPM:
-    math = (A * 256 + B) * 0.5;
-    return math;
+    return raw16 * 0.5f;
   case ENGINE_TORQUE:
   case ENGINE_TORQUE_ALT:
-    math = ((A * 256 + B) * 0.114443) - 2500;
-    return math;
+    return (raw16 * 0.114443f) - 2500.0f;
   case THROTTLE_VALVE:
-    math = A * 0.392157;
-    return math;
+    return A * 0.392157f;
   case INJECTION_VOLUME:
   case INJECTION_QUANTITY:
-    math = ((A * 256 + B) * 0.003052) - 100;
-    return math;
+    return (raw16 * 0.003052f) - 100.0f;
   case BOOST_PRESSURE_ABS:
-    return (((uint32_t)A << 8 | (uint32_t)B) * 0.091554);
+    return raw16 * 0.091554f;
   case AMBIENT_PRESSURE_ABS:
-    return (A * 256 + B) * 0.030518;
+    return raw16 * 0.030518f;
   case BATTERY_VOLTAGE:
-    return (((uint32_t)A << 8 | (uint32_t)B) * 0.389105);
+    return raw16 * 0.389105f;
   case AMBIENT_TEMPERATURE:
-    return (((uint32_t)A << 8 | (uint32_t)B) * 0.1) - 273.14;
+    return (raw16 * 0.1f) - 273.14f;
   case DPF_TEMPERATURE:
-    return (((uint32_t)A << 8 | (uint32_t)B) * 0.031281) - 50;
+    return (raw16 * 0.031281f) - 50.0f;
   case FUEL_LITERS:
-    math = ((A * 256 + B) * 0.001907);
-    return math;
+    return raw16 * 0.001907f;
   case FUEL_LITERS_ALT:
-    math = ((A * 256 + B) * 0.01);
-    return math;
+    return raw16 * 0.01f;
   case DPF_PRESSURE_DIFF:
-    return (((uint32_t)A << 8 | (uint32_t)B) * 0.045777) - 1000;
+    return (raw16 * 0.045777f) - 1000.0f;
   case DPF_ASH_WEIGHT:
   case DPF_SOOT_WEIGHT:
-    return (((uint32_t)A << 8 | (uint32_t)B) * 0.015259);
+    return raw16 * 0.015259f;
   case VEHICLE_ACC:
-    math = ((A * 256 + B) * 0.001) - 32.767000;
-    return math;
+    return (raw16 * 0.001f) - 32.767f;
   case DPF_REGEN_COUNT:
   case TOTAL_FLOW_INJ:
   case DPF_REGEN_REQ:
-    return (((uint32_t)A << 8 | (uint32_t)B));
+    return (float)raw16;
   case DPF_LIFETIME:
-    return (((uint32_t)A << 8 | (uint32_t)B)) * 10;
+    return raw16 * 10.0f;
   case COOLANT_TEMPERATURE:
   case OIL_TEMPERATURE:
   case BOOST_TEMPERATURE:
-    return (((uint32_t)A << 8 | (uint32_t)B) * 0.01) - 100;
+    return (raw16 * 0.01f) - 100.0f;
   case DPF_REGEN_STATUS:
   default:
-    return ((uint32_t)A << 24 | (uint32_t)B << 16 | (uint32_t)C << 8 | (uint32_t)D);
+    return (float)raw32;
   }
 }
 
-uint32_t OBD2Class::pidBmwRaw(uint16_t pid)
+inline uint32_t OBD2Class::pidBmwRaw(uint16_t pid)
 {
 #define A value[0]
 #define B value[1]
@@ -356,7 +358,9 @@ uint32_t OBD2Class::pidBmwRaw(uint16_t pid)
     return 0;
   }
 
-  return ((uint32_t)A << 24 | (uint32_t)B << 16 | (uint32_t)C << 8 | (uint32_t)D);
+  // Precompute 32-bit value
+  uint32_t raw32 = ((uint32_t)A << 24) | ((uint32_t)B << 16) | ((uint32_t)C << 8) | (uint32_t)D;
+  return raw32;
 }
 
 String OBD2Class::ecuNameRead()
