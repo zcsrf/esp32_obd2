@@ -159,14 +159,14 @@ public:
   bool pidValueRaw(uint8_t pid);
   bool pidSupported(uint8_t pid);
 
-  inline float pidRead(uint8_t pid);
-  inline uint32_t pidReadRaw(uint8_t pid);
+  float pidRead(uint8_t pid);
+  uint32_t pidReadRaw(uint8_t pid);
   // This is related to BMW PID
   // follows the following logic
   // mode: 2c
   // pid: 0x10 pid_h, pid_l;
-  inline float pidBmw(uint16_t pid);
-  inline uint32_t pidBmwRaw(uint16_t pid);
+  float pidBmw(uint16_t pid);
+  uint32_t pidBmwRaw(uint16_t pid);
   String vinRead();
   String ecuNameRead();
 

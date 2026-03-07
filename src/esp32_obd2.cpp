@@ -60,7 +60,7 @@ bool OBD2Class::pidValueRaw(uint8_t pid)
   }
 }
 
-inline float OBD2Class::pidRead(uint8_t pid)
+float OBD2Class::pidRead(uint8_t pid)
 {
 
 #define A value[0]
@@ -238,7 +238,7 @@ String OBD2Class::vinRead()
   return vin;
 }
 
-inline uint32_t OBD2Class::pidReadRaw(uint8_t pid)
+uint32_t OBD2Class::pidReadRaw(uint8_t pid)
 {
 
 #define A value[0]
@@ -344,7 +344,7 @@ float OBD2Class::pidBmw(uint16_t pid)
   }
 }
 
-inline uint32_t OBD2Class::pidBmwRaw(uint16_t pid)
+uint32_t OBD2Class::pidBmwRaw(uint16_t pid)
 {
 #define A value[0]
 #define B value[1]
