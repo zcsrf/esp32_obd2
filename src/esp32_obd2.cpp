@@ -344,6 +344,39 @@ float OBD2Class::pidBmw(uint16_t pid)
   }
 }
 
+// Returns Raw 8-bit value for PIDs that return 1 byte (THROTTLE_VALVE for example)
+// Returns 0xFF on failure
+uint8_t OBD2Class::pidBmwA(uint16_t pid)
+{
+  uint8_t value[4];
+  uint32_t pid_a = ((uint32_t)pid) | ((uint32_t)0x010 << 16);
+  if (!pidBmwRead(0x2C, pid_a, &value, sizeof(value)))
+    return 0xFF;
+  return value[0];
+}
+
+// Returns Raw 16-bit value for PIDs that return 2 bytes (most of them)
+// Returns 0xFFFF on failure
+uint16_t OBD2Class::pidBmwAB(uint16_t pid)
+{
+  uint8_t value[4];
+  uint32_t pid_a = ((uint32_t)pid) | ((uint32_t)0x010 << 16);
+  if (!pidBmwRead(0x2C, pid_a, &value, sizeof(value)))
+    return 0xFFFF;
+  return ((uint16_t)value[0] << 8) | value[1];
+}
+
+// Returns Raw 32-bit value for PIDs that return 4 bytes (DPF_REGEN_STATUS default case)
+// Returns 0xFFFFFFFF on failure
+uint32_t OBD2Class::pidBmwABCD(uint16_t pid)
+{
+  uint8_t value[4];
+  uint32_t pid_a = ((uint32_t)pid) | ((uint32_t)0x010 << 16);
+  if (!pidBmwRead(0x2C, pid_a, &value, sizeof(value)))
+    return 0xFFFFFFFF;
+  return ((uint32_t)value[0] << 24) | ((uint32_t)value[1] << 16) | ((uint32_t)value[2] << 8) | (uint32_t)value[3];
+}
+
 uint32_t OBD2Class::pidBmwRaw(uint16_t pid)
 {
 #define A value[0]
@@ -462,6 +495,7 @@ int OBD2Class::pidBmwRead(uint8_t mode, uint32_t pid, void *data, int length)
         // Loop through rest of multiple packets
         for (int pck = 0; read < length; pck++)
         {
+          // TODO: maybe we can reduce this delay, but it seems to be required for the ECU to respond with the next packet, otherwise we get a timeout
           delay(60);
           // send the request for the next chunk
           outgoing.data.uint8[0] = 0x30;
