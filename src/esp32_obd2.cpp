@@ -526,6 +526,96 @@ int OBD2Class::pidBmwRead(uint8_t mode, uint32_t pid, void *data, int length)
   return 0;
 }
 
+// A generic UDS function to query any BMW module by CAN ID and DID
+float OBD2Class::readBmwUdsDid(uint32_t module_can_id, uint16_t did)
+{
+  CAN_FRAME outgoing;
+  outgoing.id = module_can_id; // e.g., 0x612 for DDE, 0x640 for FRM
+  outgoing.length = 8;
+  outgoing.extended = 0;
+  outgoing.rtr = 0;
+
+  // BMW UDS / ISO-TP Tester Request format
+  outgoing.data.uint8[0] = 0xF1;                  // Tester Address (Who is asking)
+  outgoing.data.uint8[1] = 0x03;                  // PCI: 3 bytes of data follow
+  outgoing.data.uint8[2] = 0x22;                  // Service: ReadDataByIdentifier
+  outgoing.data.uint8[3] = (uint8_t)(did >> 8);   // DID High Byte
+  outgoing.data.uint8[4] = (uint8_t)(did & 0xFF); // DID Low Byte
+  outgoing.data.uint8[5] = 0x00;                  // Padding
+  outgoing.data.uint8[6] = 0x00;
+  outgoing.data.uint8[7] = 0x00;
+
+  if (!CAN0.sendFrame(outgoing))
+  {
+    return NAN; // Failed to send
+  }
+
+  CAN_FRAME incoming;
+  unsigned long start = millis();
+  uint8_t rawData[8];
+
+  // Wait for response loop
+  while ((millis() - start) < 500)
+  {
+    if (CAN0.read(incoming) != 0)
+    {
+
+      // Filter: Must be from our target ECU and addressed back to Tester (0xF1)
+      if (incoming.id == module_can_id && incoming.data.uint8[0] == 0xF1)
+      {
+
+        // --- CASE 1: Single Frame Response (PCI starts with 0x0_) ---
+        // Example: F1 05 62 [DID_H] [DID_L] [Data1] [Data2]
+        if ((incoming.data.uint8[1] & 0xF0) == 0x00)
+        {
+          if (incoming.data.uint8[2] == 0x62 && incoming.data.uint8[3] == (uint8_t)(did >> 8))
+          {
+            // Extract a standard 16-bit response (Modify this byte position based on your XML formula)
+            uint16_t value = ((uint16_t)incoming.data.uint8[5] << 8) | incoming.data.uint8[6];
+            return (float)value;
+          }
+        }
+
+        // --- CASE 2: Multi-Frame Response - First Frame (PCI starts with 0x1_) ---
+        // Example: F1 10 07 62 [DID_H] [DID_L] [Data1] [Data2]
+        else if ((incoming.data.uint8[1] & 0xF0) == 0x10)
+        {
+          if (incoming.data.uint8[3] == 0x62 && incoming.data.uint8[4] == (uint8_t)(did >> 8))
+          {
+
+            rawData[0] = incoming.data.uint8[6]; // Save First Frame data
+            rawData[1] = incoming.data.uint8[7];
+
+            // Send Flow Control to ECU: "Acknowledge, keep sending"
+            CAN_FRAME flowControl;
+            flowControl.id = module_can_id;
+            flowControl.length = 8;
+            flowControl.extended = 0;
+            flowControl.data.uint8[0] = 0xF1;
+            flowControl.data.uint8[1] = 0x30; // Flow Control: Continue to send
+            flowControl.data.uint8[2] = 0x00; // Separation Time (0 = as fast as possible)
+            flowControl.data.uint8[3] = 0x00; // Block Size (0 = no limit)
+            CAN0.sendFrame(flowControl);
+          }
+        }
+
+        // --- CASE 3: Multi-Frame Response - Consecutive Frame (PCI starts with 0x2_) ---
+        // Example: F1 21 [Data3] [Data4] ...
+        else if ((incoming.data.uint8[1] & 0xF0) == 0x20)
+        {
+          rawData[2] = incoming.data.uint8[2];
+          rawData[3] = incoming.data.uint8[3];
+
+          // Extract your 16-bit value (Modify byte positions based on your XML formula)
+          uint16_t value = ((uint16_t)rawData[0] << 8) | rawData[1];
+          return (float)value;
+        }
+      }
+    }
+  }
+  return NAN; // Timeout reached
+}
+
 int OBD2Class::pidRead(uint8_t mode, uint8_t pid, void *data, int length)
 {
   // we changed, from 60 to 10... our ECU is a bit faster

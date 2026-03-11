@@ -187,8 +187,11 @@ public:
   uint8_t pidBmwA(uint16_t pid);
   uint16_t pidBmwAB(uint16_t pid);
   uint32_t pidBmwABCD(uint16_t pid);
-
   uint32_t pidBmwRaw(uint16_t pid);
+
+  // This is related to BMW UDS DID
+  float readBmwUdsDid(uint32_t module_can_id, uint16_t did);
+
   String vinRead();
   String ecuNameRead();
 
