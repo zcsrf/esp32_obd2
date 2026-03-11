@@ -495,8 +495,8 @@ int OBD2Class::pidBmwRead(uint8_t mode, uint32_t pid, void *data, int length)
         // Loop through rest of multiple packets
         for (int pck = 0; read < length; pck++)
         {
-          // TODO: maybe we can reduce this delay, but it seems to be required for the ECU to respond with the next packet, otherwise we get a timeout
-          delay(60);
+          // wait a bit before asking for the next chunk; tuned smaller via macro
+          delay(OBD2_FLOWCTRL_CHUNK_DELAY_MS);
           // send the request for the next chunk
           outgoing.data.uint8[0] = 0x30;
           CAN0.sendFrame(outgoing);
@@ -528,12 +528,12 @@ int OBD2Class::pidBmwRead(uint8_t mode, uint32_t pid, void *data, int length)
 
 int OBD2Class::pidRead(uint8_t mode, uint8_t pid, void *data, int length)
 {
-  // we changed, from 60 to 10... our ECU is a bit faster...
-  // make sure at least 60 ms have passed since the last response
+  // we changed, from 60 to 10... our ECU is a bit faster
+  // make sure a minimal gap passes between successive requests
   unsigned long lastResponseDelta = millis() - _lastPidResponseMillis;
-  if (lastResponseDelta < 5)
+  if (lastResponseDelta < OBD2_MIN_REQUEST_GAP_MS)
   {
-    delay(5 - lastResponseDelta);
+    delay(OBD2_MIN_REQUEST_GAP_MS - lastResponseDelta);
   }
 
   CAN_FRAME outgoing;
@@ -598,9 +598,7 @@ int OBD2Class::pidRead(uint8_t mode, uint8_t pid, void *data, int length)
         // Loop through rest of multiple packets
         for (int pck = 0; read < length; pck++)
         {
-          delay(60);
-
-          // send the request for the next chunk
+          delay(OBD2_FLOWCTRL_CHUNK_DELAY_MS);
           outgoing.data.uint8[0] = 0x30;
           CAN0.sendFrame(outgoing);
 

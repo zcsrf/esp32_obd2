@@ -109,6 +109,22 @@ enum
   // more PIDs can be added from: https://en.wikipedia.org/wiki/OBD-II_PIDs
 };
 
+// default timeout for a response in milliseconds
+// 25 ms works ok for most ECUs but we can shave a few ms for aggressive
+// polling.  The timeout can be changed at runtime via setTimeout().
+#define OBD2_DEFAULT_TIMEOUT 10
+
+// minimum gap between successive requests (to avoid flooding the ECU)
+// the original library used 5 ms; modern ECUs respond faster so 1 ms is
+// usually safe.  Tune as needed for reliability.
+#define OBD2_MIN_REQUEST_GAP_MS 1
+
+// delay inserted between consecutive flow‑control chunks when receiving
+// a multi‑frame response.  The stock code used 60 ms which is very
+// conservative; we can usually get away with 10–20 ms on Bosch/diesel
+// ECUs.  Keep this macro so it’s easy to tweak later.
+#define OBD2_FLOWCTRL_CHUNK_DELAY_MS 10
+
 enum BMW
 {
   ADV_ENGINE_RPM = 0x1881,
