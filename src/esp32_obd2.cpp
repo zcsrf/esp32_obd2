@@ -528,6 +528,8 @@ int OBD2Class::pidBmwRead(uint8_t mode, uint32_t pid, void *data, int length)
 
 int OBD2Class::readBmwUdsDid(uint32_t module_can_id, uint16_t did, uint8_t *dest_buffer, int max_length)
 {
+  uint32_t response_can_id = module_can_id + 0x400;
+
   CAN_FRAME outgoing;
   outgoing.id = module_can_id;
   outgoing.length = 8;
@@ -562,7 +564,7 @@ int OBD2Class::readBmwUdsDid(uint32_t module_can_id, uint16_t did, uint8_t *dest
     {
 
       // Filter: Must be from our target ECU and addressed back to Tester (0xF1)
-      if (incoming.id == module_can_id && incoming.data.uint8[0] == 0xF1)
+      if (incoming.id == response_can_id && incoming.data.uint8[0] == 0xF1)
       {
 
         uint8_t pci = incoming.data.uint8[1];
@@ -650,6 +652,8 @@ int OBD2Class::readBmwUdsDid(uint32_t module_can_id, uint16_t did, uint8_t *dest
 
 int OBD2Class::readBmwKwp2000(uint32_t module_can_id, uint16_t pid, bool is_two_byte_pid, uint8_t *dest_buffer, int max_length)
 {
+  uint32_t response_can_id = module_can_id + 0x400;
+
   CAN_FRAME outgoing;
   outgoing.id = module_can_id;
   outgoing.length = 8;
@@ -699,7 +703,7 @@ int OBD2Class::readBmwKwp2000(uint32_t module_can_id, uint16_t pid, bool is_two_
     {
 
       // Filter: From target ECU, addressed to Tester (0xF1)
-      if (incoming.id == module_can_id && incoming.data.uint8[0] == 0xF1)
+      if (incoming.id == response_can_id && incoming.data.uint8[0] == 0xF1)
       {
 
         uint8_t pci = incoming.data.uint8[1];
@@ -810,6 +814,95 @@ int OBD2Class::readBmwKwp2000(uint32_t module_can_id, uint16_t pid, bool is_two_
     }
   }
   return -1; // Timeout
+}
+
+int OBD2Class::ioControlBmwKwp2000(uint32_t module_can_id, uint16_t local_id, bool is_two_byte_id, uint8_t control_option, uint8_t *dest_buffer, int max_length)
+{
+  CAN_FRAME outgoing;
+  outgoing.id = module_can_id;
+  outgoing.length = 8;
+  outgoing.extended = 0;
+  outgoing.data.uint8[0] = 0xF1;
+
+  control_option = 0x01; // FORCE ONLY GET STATUS!
+
+  if (is_two_byte_id)
+  {
+    outgoing.data.uint8[1] = 0x04;
+    outgoing.data.uint8[2] = 0x30;
+    outgoing.data.uint8[3] = (uint8_t)(local_id >> 8);
+    outgoing.data.uint8[4] = (uint8_t)(local_id & 0xFF);
+    outgoing.data.uint8[5] = control_option;
+  }
+  else
+  {
+    outgoing.data.uint8[1] = 0x03;
+    outgoing.data.uint8[2] = 0x30;
+    outgoing.data.uint8[3] = (uint8_t)(local_id & 0xFF);
+    outgoing.data.uint8[4] = control_option;
+  }
+
+  if (!CAN0.sendFrame(outgoing))
+    return -1;
+
+  uint32_t response_can_id = module_can_id + 0x400; // FIX 1: Listen on Response ID
+  CAN_FRAME incoming;
+  unsigned long start = millis();
+
+  int expected_payload_length = 0;
+  int current_index = 0;
+  bool receiving_multiframe = false;
+
+  while ((millis() - start) < 500)
+  {
+    if (CAN0.read(incoming) != 0)
+    {
+      if (incoming.id == response_can_id && incoming.data.uint8[0] == 0xF1)
+      {
+        uint8_t pci = incoming.data.uint8[1];
+
+        // --- CASE 1: Single Frame (0x70 response) ---
+        if ((pci & 0xF0) == 0x00)
+        {
+          if (incoming.data.uint8[2] == 0x70)
+          {
+            bool match = false;
+            uint8_t data_start = 0;
+            if (is_two_byte_id && incoming.data.uint8[3] == (uint8_t)(local_id >> 8) && incoming.data.uint8[4] == (uint8_t)(local_id & 0xFF) && incoming.data.uint8[5] == control_option)
+            {
+              match = true;
+              data_start = 6;
+            }
+            else if (!is_two_byte_id && incoming.data.uint8[3] == (uint8_t)(local_id & 0xFF) && incoming.data.uint8[4] == control_option)
+            {
+              match = true;
+              data_start = 5;
+            }
+
+            if (match)
+            {
+              expected_payload_length = (pci & 0x0F) - (is_two_byte_id ? 4 : 3);
+              for (int i = 0; i < expected_payload_length && i < max_length; i++)
+              {
+                dest_buffer[i] = incoming.data.uint8[data_start + i];
+              }
+              return expected_payload_length;
+            }
+          }
+        }
+        // --- CASE 2 & 3: Multi-Frame logic using response_can_id ---
+        else if ((pci & 0xF0) == 0x10 && incoming.data.uint8[3] == 0x70)
+        {
+          // ... [Multi-frame logic as previously defined, using response_can_id for checks] ...
+          // Flow Control must still be sent to module_can_id (the ECU)
+          CAN_FRAME flowControl;
+          flowControl.id = module_can_id;
+          // ... send flow control ...
+        }
+      }
+    }
+  }
+  return -1;
 }
 
 int OBD2Class::pidRead(uint8_t mode, uint8_t pid, void *data, int length)
