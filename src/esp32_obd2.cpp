@@ -525,6 +525,7 @@ int OBD2Class::pidBmwRead(uint8_t mode, uint32_t pid, void *data, int length)
   }
   return 0;
 }
+
 int OBD2Class::readBmwUdsDid(uint32_t module_can_id, uint16_t did, uint8_t *dest_buffer, int max_length)
 {
   CAN_FRAME outgoing;
@@ -629,6 +630,170 @@ int OBD2Class::readBmwUdsDid(uint32_t module_can_id, uint16_t did, uint8_t *dest
           for (int i = 2; i < 8; i++)
           {
             // Only save if we haven't hit the expected length or buffer limit
+            if (current_index < expected_payload_length && current_index < max_length)
+            {
+              dest_buffer[current_index++] = incoming.data.uint8[i];
+            }
+          }
+
+          if (current_index >= expected_payload_length)
+          {
+            return current_index; // SUCCESS
+          }
+          start = millis();
+        }
+      }
+    }
+  }
+  return -1; // Timeout
+}
+
+int OBD2Class::readBmwKwp2000(uint32_t module_can_id, uint16_t pid, bool is_two_byte_pid, uint8_t *dest_buffer, int max_length)
+{
+  CAN_FRAME outgoing;
+  outgoing.id = module_can_id;
+  outgoing.length = 8;
+  outgoing.extended = 0;
+  outgoing.rtr = 0;
+
+  // Tester Address
+  outgoing.data.uint8[0] = 0xF1;
+
+  // Format the request based on PID length
+  if (is_two_byte_pid)
+  {
+    outgoing.data.uint8[1] = 0x03;                  // PCI: 3 bytes follow
+    outgoing.data.uint8[2] = 0x21;                  // Service: ReadDataByLocalIdentifier
+    outgoing.data.uint8[3] = (uint8_t)(pid >> 8);   // PID High
+    outgoing.data.uint8[4] = (uint8_t)(pid & 0xFF); // PID Low
+    outgoing.data.uint8[5] = 0x00;
+  }
+  else
+  {
+    outgoing.data.uint8[1] = 0x02;                  // PCI: 2 bytes follow
+    outgoing.data.uint8[2] = 0x21;                  // Service: ReadDataByLocalIdentifier
+    outgoing.data.uint8[3] = (uint8_t)(pid & 0xFF); // PID Only
+    outgoing.data.uint8[4] = 0x00;
+    outgoing.data.uint8[5] = 0x00;
+  }
+  outgoing.data.uint8[6] = 0x00;
+  outgoing.data.uint8[7] = 0x00;
+
+  if (!CAN0.sendFrame(outgoing))
+    return -1;
+
+  CAN_FRAME incoming;
+  unsigned long start = millis();
+
+  int expected_payload_length = 0;
+  int current_index = 0;
+  bool receiving_multiframe = false;
+
+  // Variables to hold expected response offsets
+  uint8_t pid_h = (uint8_t)(pid >> 8);
+  uint8_t pid_l = (uint8_t)(pid & 0xFF);
+
+  while ((millis() - start) < 500)
+  {
+    if (CAN0.read(incoming) != 0)
+    {
+
+      // Filter: From target ECU, addressed to Tester (0xF1)
+      if (incoming.id == module_can_id && incoming.data.uint8[0] == 0xF1)
+      {
+
+        uint8_t pci = incoming.data.uint8[1];
+
+        // --- CASE 1: Single Frame ---
+        if ((pci & 0xF0) == 0x00)
+        {
+          if (incoming.data.uint8[2] == 0x61)
+          { // 0x61 is KWP2000 Success
+            bool match = false;
+            uint8_t data_start = 0;
+
+            if (is_two_byte_pid && incoming.data.uint8[3] == pid_h && incoming.data.uint8[4] == pid_l)
+            {
+              match = true;
+              data_start = 5;
+            }
+            else if (!is_two_byte_pid && incoming.data.uint8[3] == pid_l)
+            {
+              match = true;
+              data_start = 4;
+            }
+
+            if (match)
+            {
+              // Calculate actual data payload length
+              expected_payload_length = (pci & 0x0F) - (is_two_byte_pid ? 3 : 2);
+
+              for (int i = 0; i < expected_payload_length && i < max_length; i++)
+              {
+                dest_buffer[i] = incoming.data.uint8[data_start + i];
+              }
+              return expected_payload_length;
+            }
+          }
+        }
+
+        // --- CASE 2: Multi-Frame First Frame ---
+        else if ((pci & 0xF0) == 0x10)
+        {
+          if (incoming.data.uint8[3] == 0x61)
+          {
+            bool match = false;
+            uint8_t data_start = 0;
+
+            if (is_two_byte_pid && incoming.data.uint8[4] == pid_h && incoming.data.uint8[5] == pid_l)
+            {
+              match = true;
+              data_start = 6;
+            }
+            else if (!is_two_byte_pid && incoming.data.uint8[4] == pid_l)
+            {
+              match = true;
+              data_start = 5;
+            }
+
+            if (match)
+            {
+              receiving_multiframe = true;
+
+              // Total length minus service bytes
+              expected_payload_length = (((pci & 0x0F) << 8) | incoming.data.uint8[2]) - (is_two_byte_pid ? 3 : 2);
+
+              // Extract remaining bytes in this first frame
+              for (int i = data_start; i < 8; i++)
+              {
+                if (current_index < max_length)
+                {
+                  dest_buffer[current_index++] = incoming.data.uint8[i];
+                }
+              }
+
+              // Send Flow Control
+              CAN_FRAME flowControl;
+              flowControl.id = module_can_id;
+              flowControl.length = 8;
+              flowControl.data.uint8[0] = 0xF1;
+              flowControl.data.uint8[1] = 0x30;
+              flowControl.data.uint8[2] = 0x00;
+              flowControl.data.uint8[3] = 0x00;
+              for (int i = 4; i < 8; i++)
+                flowControl.data.uint8[i] = 0x00;
+              CAN0.sendFrame(flowControl);
+
+              start = millis();
+            }
+          }
+        }
+
+        // --- CASE 3: Multi-Frame Consecutive Frame ---
+        else if (receiving_multiframe && (pci & 0xF0) == 0x20)
+        {
+          for (int i = 2; i < 8; i++)
+          {
             if (current_index < expected_payload_length && current_index < max_length)
             {
               dest_buffer[current_index++] = incoming.data.uint8[i];

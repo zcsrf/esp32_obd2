@@ -191,6 +191,9 @@ public:
 
   // This is related to BMW UDS DID
   int readBmwUdsDid(uint32_t module_can_id, uint16_t did, uint8_t *dest_buffer, int max_length);
+  // This is related to BMW KWP2000 DID
+  // Supports standard KWP2000 (1-byte PID) and BMW Two-Step KWP2000 (2-byte PID)
+  int readBmwKwp2000(uint32_t module_can_id, uint16_t pid, bool is_two_byte_pid, uint8_t *dest_buffer, int max_length);
 
   String vinRead();
   String ecuNameRead();
