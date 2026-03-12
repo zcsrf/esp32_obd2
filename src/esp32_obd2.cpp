@@ -525,8 +525,6 @@ int OBD2Class::pidBmwRead(uint8_t mode, uint32_t pid, void *data, int length)
   }
   return 0;
 }
-
-// Returns number of bytes read into dest_buffer, or -1 on failure (timeout or protocol error)
 int OBD2Class::readBmwUdsDid(uint32_t module_can_id, uint16_t did, uint8_t *dest_buffer, int max_length)
 {
   CAN_FRAME outgoing;
@@ -569,10 +567,14 @@ int OBD2Class::readBmwUdsDid(uint32_t module_can_id, uint16_t did, uint8_t *dest
         uint8_t pci = incoming.data.uint8[1];
 
         // --- CASE 1: Single Frame (PCI starts with 0x0_) ---
+        // Layout: [0xF1] [0x0N] [0x62] [DID_H] [DID_L] [Data0] [Data1] [Data2]
         if ((pci & 0xF0) == 0x00)
         {
-          if (incoming.data.uint8[2] == 0x62 && incoming.data.uint8[3] == (uint8_t)(did >> 8))
-          {
+          if (incoming.data.uint8[2] == 0x62 &&
+              incoming.data.uint8[3] == (uint8_t)(did >> 8) &&
+              incoming.data.uint8[4] == (uint8_t)(did & 0xFF))
+          { // Added DID Low check
+
             // Total length minus 3 (0x62 Service Byte + 2 DID bytes) = actual data length
             expected_payload_length = (pci & 0x0F) - 3;
 
@@ -585,13 +587,17 @@ int OBD2Class::readBmwUdsDid(uint32_t module_can_id, uint16_t did, uint8_t *dest
         }
 
         // --- CASE 2: Multi-Frame First Frame (PCI starts with 0x1_) ---
+        // Layout: [0xF1] [0x1N] [Len_L] [0x62] [DID_H] [DID_L] [Data0] [Data1]
         else if ((pci & 0xF0) == 0x10)
         {
-          if (incoming.data.uint8[3] == 0x62 && incoming.data.uint8[4] == (uint8_t)(did >> 8))
-          {
+          if (incoming.data.uint8[3] == 0x62 &&
+              incoming.data.uint8[4] == (uint8_t)(did >> 8) &&
+              incoming.data.uint8[5] == (uint8_t)(did & 0xFF))
+          { // Added DID Low check
+
             receiving_multiframe = true;
 
-            // 12-bit length minus 3 (Service + DID bytes)
+            // 12-bit length minus 3 (Service + 2 DID bytes)
             expected_payload_length = (((pci & 0x0F) << 8) | incoming.data.uint8[2]) - 3;
 
             if (max_length > 0)
@@ -600,7 +606,7 @@ int OBD2Class::readBmwUdsDid(uint32_t module_can_id, uint16_t did, uint8_t *dest
               dest_buffer[1] = incoming.data.uint8[7];
             current_index = 2;
 
-            // Send Flow Control
+            // Send Flow Control (Continue)
             CAN_FRAME flowControl;
             flowControl.id = module_can_id;
             flowControl.length = 8;
@@ -617,11 +623,12 @@ int OBD2Class::readBmwUdsDid(uint32_t module_can_id, uint16_t did, uint8_t *dest
         }
 
         // --- CASE 3: Multi-Frame Consecutive Frame (PCI starts with 0x2_) ---
+        // Layout: [0xF1] [0x2X] [DataX] [DataX] [DataX] [DataX] [DataX] [DataX]
         else if (receiving_multiframe && (pci & 0xF0) == 0x20)
         {
           for (int i = 2; i < 8; i++)
           {
-            // Only save if we haven't hit the expected length or our buffer limit
+            // Only save if we haven't hit the expected length or buffer limit
             if (current_index < expected_payload_length && current_index < max_length)
             {
               dest_buffer[current_index++] = incoming.data.uint8[i];
