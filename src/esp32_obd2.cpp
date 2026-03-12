@@ -526,35 +526,37 @@ int OBD2Class::pidBmwRead(uint8_t mode, uint32_t pid, void *data, int length)
   return 0;
 }
 
-// A generic UDS function to query any BMW module by CAN ID and DID
-float OBD2Class::readBmwUdsDid(uint32_t module_can_id, uint16_t did)
+// Returns number of bytes read into dest_buffer, or -1 on failure (timeout or protocol error)
+int OBD2Class::readBmwUdsDid(uint32_t module_can_id, uint16_t did, uint8_t *dest_buffer, int max_length)
 {
   CAN_FRAME outgoing;
-  outgoing.id = module_can_id; // e.g., 0x612 for DDE, 0x640 for FRM
+  outgoing.id = module_can_id;
   outgoing.length = 8;
   outgoing.extended = 0;
   outgoing.rtr = 0;
 
   // BMW UDS / ISO-TP Tester Request format
-  outgoing.data.uint8[0] = 0xF1;                  // Tester Address (Who is asking)
-  outgoing.data.uint8[1] = 0x03;                  // PCI: 3 bytes of data follow
+  outgoing.data.uint8[0] = 0xF1;                  // Tester Address
+  outgoing.data.uint8[1] = 0x03;                  // PCI: 3 bytes follow
   outgoing.data.uint8[2] = 0x22;                  // Service: ReadDataByIdentifier
-  outgoing.data.uint8[3] = (uint8_t)(did >> 8);   // DID High Byte
-  outgoing.data.uint8[4] = (uint8_t)(did & 0xFF); // DID Low Byte
-  outgoing.data.uint8[5] = 0x00;                  // Padding
+  outgoing.data.uint8[3] = (uint8_t)(did >> 8);   // DID High
+  outgoing.data.uint8[4] = (uint8_t)(did & 0xFF); // DID Low
+  outgoing.data.uint8[5] = 0x00;
   outgoing.data.uint8[6] = 0x00;
   outgoing.data.uint8[7] = 0x00;
 
   if (!CAN0.sendFrame(outgoing))
   {
-    return NAN; // Failed to send
+    return -1;
   }
 
   CAN_FRAME incoming;
   unsigned long start = millis();
-  uint8_t rawData[8];
 
-  // Wait for response loop
+  int expected_payload_length = 0;
+  int current_index = 0;
+  bool receiving_multiframe = false;
+
   while ((millis() - start) < 500)
   {
     if (CAN0.read(incoming) != 0)
@@ -564,56 +566,78 @@ float OBD2Class::readBmwUdsDid(uint32_t module_can_id, uint16_t did)
       if (incoming.id == module_can_id && incoming.data.uint8[0] == 0xF1)
       {
 
-        // --- CASE 1: Single Frame Response (PCI starts with 0x0_) ---
-        // Example: F1 05 62 [DID_H] [DID_L] [Data1] [Data2]
-        if ((incoming.data.uint8[1] & 0xF0) == 0x00)
+        uint8_t pci = incoming.data.uint8[1];
+
+        // --- CASE 1: Single Frame (PCI starts with 0x0_) ---
+        if ((pci & 0xF0) == 0x00)
         {
           if (incoming.data.uint8[2] == 0x62 && incoming.data.uint8[3] == (uint8_t)(did >> 8))
           {
-            // Extract a standard 16-bit response (Modify this byte position based on your XML formula)
-            uint16_t value = ((uint16_t)incoming.data.uint8[5] << 8) | incoming.data.uint8[6];
-            return (float)value;
+            // Total length minus 3 (0x62 Service Byte + 2 DID bytes) = actual data length
+            expected_payload_length = (pci & 0x0F) - 3;
+
+            for (int i = 0; i < expected_payload_length && i < max_length; i++)
+            {
+              dest_buffer[i] = incoming.data.uint8[5 + i];
+            }
+            return expected_payload_length;
           }
         }
 
-        // --- CASE 2: Multi-Frame Response - First Frame (PCI starts with 0x1_) ---
-        // Example: F1 10 07 62 [DID_H] [DID_L] [Data1] [Data2]
-        else if ((incoming.data.uint8[1] & 0xF0) == 0x10)
+        // --- CASE 2: Multi-Frame First Frame (PCI starts with 0x1_) ---
+        else if ((pci & 0xF0) == 0x10)
         {
           if (incoming.data.uint8[3] == 0x62 && incoming.data.uint8[4] == (uint8_t)(did >> 8))
           {
+            receiving_multiframe = true;
 
-            rawData[0] = incoming.data.uint8[6]; // Save First Frame data
-            rawData[1] = incoming.data.uint8[7];
+            // 12-bit length minus 3 (Service + DID bytes)
+            expected_payload_length = (((pci & 0x0F) << 8) | incoming.data.uint8[2]) - 3;
 
-            // Send Flow Control to ECU: "Acknowledge, keep sending"
+            if (max_length > 0)
+              dest_buffer[0] = incoming.data.uint8[6];
+            if (max_length > 1)
+              dest_buffer[1] = incoming.data.uint8[7];
+            current_index = 2;
+
+            // Send Flow Control
             CAN_FRAME flowControl;
             flowControl.id = module_can_id;
             flowControl.length = 8;
-            flowControl.extended = 0;
             flowControl.data.uint8[0] = 0xF1;
-            flowControl.data.uint8[1] = 0x30; // Flow Control: Continue to send
-            flowControl.data.uint8[2] = 0x00; // Separation Time (0 = as fast as possible)
-            flowControl.data.uint8[3] = 0x00; // Block Size (0 = no limit)
+            flowControl.data.uint8[1] = 0x30;
+            flowControl.data.uint8[2] = 0x00;
+            flowControl.data.uint8[3] = 0x00;
+            for (int i = 4; i < 8; i++)
+              flowControl.data.uint8[i] = 0x00;
             CAN0.sendFrame(flowControl);
+
+            start = millis();
           }
         }
 
-        // --- CASE 3: Multi-Frame Response - Consecutive Frame (PCI starts with 0x2_) ---
-        // Example: F1 21 [Data3] [Data4] ...
-        else if ((incoming.data.uint8[1] & 0xF0) == 0x20)
+        // --- CASE 3: Multi-Frame Consecutive Frame (PCI starts with 0x2_) ---
+        else if (receiving_multiframe && (pci & 0xF0) == 0x20)
         {
-          rawData[2] = incoming.data.uint8[2];
-          rawData[3] = incoming.data.uint8[3];
+          for (int i = 2; i < 8; i++)
+          {
+            // Only save if we haven't hit the expected length or our buffer limit
+            if (current_index < expected_payload_length && current_index < max_length)
+            {
+              dest_buffer[current_index++] = incoming.data.uint8[i];
+            }
+          }
 
-          // Extract your 16-bit value (Modify byte positions based on your XML formula)
-          uint16_t value = ((uint16_t)rawData[0] << 8) | rawData[1];
-          return (float)value;
+          if (current_index >= expected_payload_length)
+          {
+            return current_index; // SUCCESS
+          }
+          start = millis();
         }
       }
     }
   }
-  return NAN; // Timeout reached
+  return -1; // Timeout
 }
 
 int OBD2Class::pidRead(uint8_t mode, uint8_t pid, void *data, int length)
