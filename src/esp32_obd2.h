@@ -117,13 +117,13 @@ enum
 // minimum gap between successive requests (to avoid flooding the ECU)
 // the original library used 5 ms; modern ECUs respond faster so 1 ms is
 // usually safe.  Tune as needed for reliability.
-#define OBD2_MIN_REQUEST_GAP_MS 1
+#define OBD2_MIN_REQUEST_GAP_MS 5
 
 // delay inserted between consecutive flow‑control chunks when receiving
 // a multi‑frame response.  The stock code used 60 ms which is very
 // conservative; we can usually get away with 10–20 ms on Bosch/diesel
 // ECUs.  Keep this macro so it’s easy to tweak later.
-#define OBD2_FLOWCTRL_CHUNK_DELAY_MS 10
+#define OBD2_FLOWCTRL_CHUNK_DELAY_MS 5 //10
 
 enum BMW
 {
@@ -160,9 +160,6 @@ enum BMW
 
 };
 
-// default timeout for a response in milliseconds
-#define OBD2_DEFAULT_TIMEOUT 25
-
 class OBD2Class
 {
 public:
@@ -190,14 +187,13 @@ public:
   uint32_t pidBmwRaw(uint16_t pid);
 
   // This is related to BMW UDS DID
-  int readBmwUdsDid(uint32_t module_can_id, uint16_t did, uint8_t *dest_buffer, int max_length);
+  int readBmwUdsDid(uint8_t module_addr, uint16_t did, uint8_t *dest_buffer, int max_length);
   // This is related to BMW KWP2000 DID
   // Supports standard KWP2000 (1-byte PID) and BMW Two-Step KWP2000 (2-byte PID)
-  int readBmwKwp2000(uint32_t module_can_id, uint16_t pid, bool is_two_byte_pid, uint8_t *dest_buffer, int max_length);
-  // InputOutput control for BMW KWP2000
+int readBmwKwp2000(uint8_t module_addr, uint16_t pid, bool is_two_byte_pid, uint8_t *dest_buffer, int max_length);  // InputOutput control for BMW KWP2000
   // Service 0x30: InputOutputControlByLocalIdentifier
   // control_option: 0x00 (Return Control), 0x01 (Report State), 0x04 (Reset), 0x07 (Freeze), 0x08 (Adjust)
-  int ioControlBmwKwp2000(uint32_t module_can_id, uint16_t local_id, bool is_two_byte_id, uint8_t control_option, uint8_t *dest_buffer, int max_length);
+  int ioControlBmwKwp2000(uint8_t module_addr, uint16_t local_id, bool is_two_byte_id, uint8_t control_option, uint8_t *dest_buffer, int max_length);
 
   String vinRead();
   String ecuNameRead();
@@ -209,7 +205,11 @@ public:
 private:
   int supportedPidsRead();
   int pidRead(uint8_t mode, uint8_t pid, void *data, int length);
-  int pidBmwRead(uint8_t mode, uint32_t advanced_pid, void *data, int length);
+  // Read a BMW-specific PID. Returns number of bytes read (0 on failure).
+  // If `response_id` is provided it will be set to the CAN ID of the frame that
+  // supplied the data.  This parameter has a default of nullptr so existing
+  // callers need not be changed.
+  int pidBmwRead(uint8_t mode, uint32_t advanced_pid, void *data, int length, uint32_t *response_id = nullptr);
 
 private:
   unsigned long _responseTimeout;
