@@ -2,6 +2,8 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 #include <math.h>
+#include <array>
+#include <cstring>
 #include <esp32_can.h>
 #include "esp32_obd2.h"
 
@@ -27,13 +29,6 @@ int OBD2Class::begin()
   // Standard OBD2 response IDs
   CAN0.watchFor(0x7E8);
   CAN0.watchFor(0x18DAF110);
-
-  // BMW-FAST on CAN: all traffic (requests + responses) lives in 0x600–0x6FF
-  // Tester sends on 0x6F1, ECUs respond on 0x600|their_addr (e.g. 0x678, 0x612)
-  // Also covers 0x130 (terminal/clamp status broadcast)
-  CAN0.watchForRange(0x600, 0x6FF);
-  //CAN0.watchFor(0x130);
-
   return 1;
 }
 
@@ -437,7 +432,7 @@ int OBD2Class::pidBmwRead(uint8_t mode, uint32_t pid, void *data, int length, ui
 
   CAN_FRAME outgoing;
   outgoing.id = 0x7df;
-  //outgoing.id = 0x7df;
+  // outgoing.id = 0x7df;
   outgoing.length = 8;
   outgoing.extended = 0;
   outgoing.rtr = 0;
@@ -478,15 +473,21 @@ int OBD2Class::pidBmwRead(uint8_t mode, uint32_t pid, void *data, int length, ui
   {
     if (CAN0.read(incoming) != 0)
     {
+      // Make sure frame has enough bytes for the headers we access
+      if (incoming.length < 3)
+      {
+        continue;
+      }
+
       _lastPidResponseMillis = millis();
       if (!splitResponse && incoming.data.uint8[1] == (mode | 0x40) && incoming.data.uint8[2] == (uint8_t)(pid >> 16))
       {
-        for (uint8_t i = 0; i < length; i++)
-        {
-          ((uint8_t *)data)[i] = incoming.data.uint8[i + 3];
-        }
-        if (response_id) *response_id = incoming.id;
-        return length;
+        int available = (int)incoming.length - 3;
+        int toCopy = (length < available) ? length : available;
+        memcpy(data, &incoming.data.uint8[3], toCopy);
+        if (response_id)
+          *response_id = incoming.id;
+        return (toCopy == length) ? length : toCopy;
       }
 
       // Is multiple packets
@@ -495,12 +496,12 @@ int OBD2Class::pidBmwRead(uint8_t mode, uint32_t pid, void *data, int length, ui
         int read = 0;
 
         // Get first packet
-        //////// Why only read three of the remaining six bytes in the first packet:
-        //////// int read = CAN.readBytes((uint8_t*)data, 3);
-        while (read < 3)
+        int available = (int)incoming.length - 2;
+        int toCopy = (available < 0) ? 0 : ((available < length) ? available : length);
+        if (toCopy > 0)
         {
-          ((uint8_t *)data)[read] = incoming.data.uint8[read + 2];
-          read++;
+          memcpy(data, &incoming.data.uint8[2], toCopy);
+          read += toCopy;
         }
 
         // Loop through rest of multiple packets
@@ -514,6 +515,7 @@ int OBD2Class::pidBmwRead(uint8_t mode, uint32_t pid, void *data, int length, ui
           // wait for (proper) response
           while (CAN0.read(incoming) != 0 || incoming.data.uint8[0] != (0x21 + pck))
           {
+            delay(1);
             // Serial.print(".");
           }; // correct sequence number
 
@@ -530,480 +532,13 @@ int OBD2Class::pidBmwRead(uint8_t mode, uint32_t pid, void *data, int length, ui
         }
 
         _lastPidResponseMillis = millis();
-        if (response_id) *response_id = incoming.id;
+        if (response_id)
+          *response_id = incoming.id;
         return read;
       }
     }
   }
   return 0;
-}
-
-int OBD2Class::readBmwUdsDid(uint8_t module_addr, uint16_t did, uint8_t *dest_buffer, int max_length)
-{
-  // BMW-FAST on CAN: tester sends on 0x6F1 (0x600 | 0xF1), ECU address goes in data[0]
-  // ECU responds on 0x600 | module_addr, with data[0] == 0xF1
-  uint32_t response_can_id = 0x600 | module_addr;
-
-  CAN_FRAME outgoing;
-  outgoing.id       = 0x6F1; // 0x600 | tester address (0xF1)
-  outgoing.length   = 8;
-  outgoing.extended = 0;
-  outgoing.rtr      = 0;
-
-  // BMW-FAST frame layout: [target_addr] [PCI] [service] [params...]
-  outgoing.data.uint8[0] = module_addr;            // Target ECU address
-  outgoing.data.uint8[1] = 0x03;                   // PCI: 3 bytes follow
-  outgoing.data.uint8[2] = 0x22;                   // Service: ReadDataByIdentifier
-  outgoing.data.uint8[3] = (uint8_t)(did >> 8);    // DID High
-  outgoing.data.uint8[4] = (uint8_t)(did & 0xFF);  // DID Low
-  outgoing.data.uint8[5] = 0x00;
-  outgoing.data.uint8[6] = 0x00;
-  outgoing.data.uint8[7] = 0x00;
-
-  if (!CAN0.sendFrame(outgoing))
-  {
-    return -1;
-  }
-
-  CAN_FRAME incoming;
-  unsigned long start = millis();
-
-  int expected_payload_length = 0;
-  int current_index = 0;
-  bool receiving_multiframe = false;
-
-  while ((millis() - start) < 500)
-  {
-    if (CAN0.read(incoming) != 0)
-    {
-      // Filter: from target ECU (0x600 | module_addr), addressed back to tester (0xF1)
-      if (incoming.id == response_can_id && incoming.data.uint8[0] == 0xF1)
-      {
-        uint8_t pci = incoming.data.uint8[1];
-
-        // --- CASE 1: Single Frame ---
-        // Layout: [0xF1] [0x0N] [0x62] [DID_H] [DID_L] [Data0...]
-        if ((pci & 0xF0) == 0x00)
-        {
-          if (incoming.data.uint8[2] == 0x62 &&
-              incoming.data.uint8[3] == (uint8_t)(did >> 8) &&
-              incoming.data.uint8[4] == (uint8_t)(did & 0xFF))
-          {
-            expected_payload_length = (pci & 0x0F) - 3; // subtract service + 2 DID bytes
-
-            for (int i = 0; i < expected_payload_length && i < max_length; i++)
-            {
-              dest_buffer[i] = incoming.data.uint8[5 + i];
-            }
-            return expected_payload_length;
-          }
-        }
-
-        // --- CASE 2: Multi-Frame First Frame ---
-        // Layout: [0xF1] [0x1N] [Len_L] [0x62] [DID_H] [DID_L] [Data0] [Data1]
-        else if ((pci & 0xF0) == 0x10)
-        {
-          if (incoming.data.uint8[3] == 0x62 &&
-              incoming.data.uint8[4] == (uint8_t)(did >> 8) &&
-              incoming.data.uint8[5] == (uint8_t)(did & 0xFF))
-          {
-            receiving_multiframe = true;
-
-            expected_payload_length = (((pci & 0x0F) << 8) | incoming.data.uint8[2]) - 3;
-
-            if (max_length > 0) dest_buffer[0] = incoming.data.uint8[6];
-            if (max_length > 1) dest_buffer[1] = incoming.data.uint8[7];
-            current_index = 2;
-
-            // Send Flow Control — goes to ECU (0x6F1 -> ECU), so use our TX id
-            CAN_FRAME flowControl;
-            flowControl.id             = 0x6F1;
-            flowControl.length         = 8;
-            flowControl.data.uint8[0]  = module_addr; // target
-            flowControl.data.uint8[1]  = 0x30;        // FC: ContinueToSend
-            flowControl.data.uint8[2]  = 0x00;        // block size 0 = send all
-            flowControl.data.uint8[3]  = 0x00;        // min separation time
-            for (int i = 4; i < 8; i++)
-              flowControl.data.uint8[i] = 0x00;
-            CAN0.sendFrame(flowControl);
-
-            start = millis();
-          }
-        }
-
-        // --- CASE 3: Multi-Frame Consecutive Frame ---
-        // Layout: [0xF1] [0x2X] [Data...] x6
-        else if (receiving_multiframe && (pci & 0xF0) == 0x20)
-        {
-          for (int i = 2; i < 8; i++)
-          {
-            if (current_index < expected_payload_length && current_index < max_length)
-            {
-              dest_buffer[current_index++] = incoming.data.uint8[i];
-            }
-          }
-
-          if (current_index >= expected_payload_length)
-          {
-            return current_index; // SUCCESS
-          }
-          start = millis();
-        }
-      }
-    }
-  }
-  return -1; // Timeout
-}
-
-int OBD2Class::readBmwKwp2000(uint8_t module_addr, uint16_t pid, bool is_two_byte_pid, uint8_t *dest_buffer, int max_length)
-{
-  // BMW-FAST on CAN: tester sends on 0x6F1, ECU address in data[0]
-  // ECU responds on 0x600 | module_addr, with data[0] == 0xF1
-  uint32_t response_can_id = 0x600 | module_addr;
-
-  CAN_FRAME outgoing;
-  outgoing.id       = 0x6F1; // 0x600 | tester (0xF1)
-  outgoing.length   = 8;
-  outgoing.extended = 0;
-  outgoing.rtr      = 0;
-
-  uint8_t pid_h = (uint8_t)(pid >> 8);
-  uint8_t pid_l = (uint8_t)(pid & 0xFF);
-
-  // BMW-FAST frame layout: [target_addr] [PCI] [service] [params...]
-  outgoing.data.uint8[0] = module_addr; // Target ECU address
-
-  if (is_two_byte_pid)
-  {
-    outgoing.data.uint8[1] = 0x03; // PCI: 3 bytes follow
-    outgoing.data.uint8[2] = 0x21; // Service: ReadDataByLocalIdentifier
-    outgoing.data.uint8[3] = pid_h;
-    outgoing.data.uint8[4] = pid_l;
-    outgoing.data.uint8[5] = 0x00;
-  }
-  else
-  {
-    outgoing.data.uint8[1] = 0x02; // PCI: 2 bytes follow
-    outgoing.data.uint8[2] = 0x21; // Service: ReadDataByLocalIdentifier
-    outgoing.data.uint8[3] = pid_l;
-    outgoing.data.uint8[4] = 0x00;
-    outgoing.data.uint8[5] = 0x00;
-  }
-  outgoing.data.uint8[6] = 0x00;
-  outgoing.data.uint8[7] = 0x00;
-
-  if (!CAN0.sendFrame(outgoing))
-    return -1;
-
-  CAN_FRAME incoming;
-  unsigned long start = millis();
-
-  int expected_payload_length = 0;
-  int current_index = 0;
-  bool receiving_multiframe = false;
-
-  while ((millis() - start) < 500)
-  {
-    if (CAN0.read(incoming) != 0)
-    {
-      // Filter: from ECU (0x600 | module_addr), data[0] == 0xF1 (addressed to us)
-      if (incoming.id == response_can_id && incoming.data.uint8[0] == 0xF1)
-      {
-        uint8_t pci = incoming.data.uint8[1];
-
-        // --- CASE 1: Single Frame ---
-        // Layout: [0xF1] [0x0N] [0x61] [PID...] [Data...]
-        if ((pci & 0xF0) == 0x00)
-        {
-          if (incoming.data.uint8[2] == 0x61)
-          {
-            bool match = false;
-            uint8_t data_start = 0;
-
-            if (is_two_byte_pid && incoming.data.uint8[3] == pid_h && incoming.data.uint8[4] == pid_l)
-            {
-              match = true;
-              data_start = 5;
-            }
-            else if (!is_two_byte_pid && incoming.data.uint8[3] == pid_l)
-            {
-              match = true;
-              data_start = 4;
-            }
-
-            if (match)
-            {
-              expected_payload_length = (pci & 0x0F) - (is_two_byte_pid ? 3 : 2);
-
-              for (int i = 0; i < expected_payload_length && i < max_length; i++)
-              {
-                dest_buffer[i] = incoming.data.uint8[data_start + i];
-              }
-              return expected_payload_length;
-            }
-          }
-        }
-
-        // --- CASE 2: Multi-Frame First Frame ---
-        // Layout: [0xF1] [0x1N] [Len_L] [0x61] [PID...] [Data...]
-        else if ((pci & 0xF0) == 0x10)
-        {
-          if (incoming.data.uint8[3] == 0x61)
-          {
-            bool match = false;
-            uint8_t data_start = 0;
-
-            if (is_two_byte_pid && incoming.data.uint8[4] == pid_h && incoming.data.uint8[5] == pid_l)
-            {
-              match = true;
-              data_start = 6;
-            }
-            else if (!is_two_byte_pid && incoming.data.uint8[4] == pid_l)
-            {
-              match = true;
-              data_start = 5;
-            }
-
-            if (match)
-            {
-              receiving_multiframe = true;
-
-              expected_payload_length = (((pci & 0x0F) << 8) | incoming.data.uint8[2]) - (is_two_byte_pid ? 3 : 2);
-
-              for (int i = data_start; i < 8; i++)
-              {
-                if (current_index < max_length)
-                {
-                  dest_buffer[current_index++] = incoming.data.uint8[i];
-                }
-              }
-
-              // Flow Control — send from tester (0x6F1) to ECU
-              CAN_FRAME flowControl;
-              flowControl.id            = 0x6F1;
-              flowControl.length        = 8;
-              flowControl.data.uint8[0] = module_addr; // target
-              flowControl.data.uint8[1] = 0x30;        // FC: ContinueToSend
-              flowControl.data.uint8[2] = 0x00;        // block size 0 = send all
-              flowControl.data.uint8[3] = 0x00;        // min separation time
-              for (int i = 4; i < 8; i++)
-                flowControl.data.uint8[i] = 0x00;
-              CAN0.sendFrame(flowControl);
-
-              start = millis();
-            }
-          }
-        }
-
-        // --- CASE 3: Multi-Frame Consecutive Frame ---
-        else if (receiving_multiframe && (pci & 0xF0) == 0x20)
-        {
-          for (int i = 2; i < 8; i++)
-          {
-            if (current_index < expected_payload_length && current_index < max_length)
-            {
-              dest_buffer[current_index++] = incoming.data.uint8[i];
-            }
-          }
-
-          if (current_index >= expected_payload_length)
-          {
-            return current_index; // SUCCESS
-          }
-          start = millis();
-        }
-      }
-    }
-  }
-  return -1; // Timeout
-}
-
-int OBD2Class::ioControlBmwKwp2000(uint8_t module_addr, uint16_t local_id, bool is_two_byte_id, uint8_t control_option, uint8_t *dest_buffer, int max_length)
-{
-  control_option = 0x01; // FORCE reportCurrentState — never risk actuator control
-
-  // BMW-FAST on CAN: tester sends on 0x6F1, ECU address in data[0]
-  // ECU responds on 0x600 | module_addr, with data[0] == 0xF1
-  uint32_t response_can_id = 0x600 | module_addr;
-
-  CAN_FRAME outgoing;
-  outgoing.id       = 0x6F1; // 0x600 | tester (0xF1)
-  outgoing.length   = 8;
-  outgoing.extended = 0;
-  outgoing.rtr      = 0;
-
-  uint8_t id_h = (uint8_t)(local_id >> 8);
-  uint8_t id_l = (uint8_t)(local_id & 0xFF);
-
-  // BMW-FAST frame layout: [target_addr] [PCI] [service] [id...] [control_option]
-  outgoing.data.uint8[0] = module_addr; // Target ECU address
-
-  if (is_two_byte_id)
-  {
-    outgoing.data.uint8[1] = 0x04; // PCI: 4 bytes follow
-    outgoing.data.uint8[2] = 0x30; // Service: InputOutputControlByLocalIdentifier
-    outgoing.data.uint8[3] = id_h;
-    outgoing.data.uint8[4] = id_l;
-    outgoing.data.uint8[5] = control_option;
-    outgoing.data.uint8[6] = 0x00;
-    outgoing.data.uint8[7] = 0x00;
-  }
-  else
-  {
-    outgoing.data.uint8[1] = 0x03; // PCI: 3 bytes follow
-    outgoing.data.uint8[2] = 0x30; // Service: InputOutputControlByLocalIdentifier
-    outgoing.data.uint8[3] = id_l;
-    outgoing.data.uint8[4] = control_option;
-    outgoing.data.uint8[5] = 0x00;
-    outgoing.data.uint8[6] = 0x00;
-    outgoing.data.uint8[7] = 0x00;
-  }
-
-  if (!CAN0.sendFrame(outgoing))
-    return -1;
-
-  CAN_FRAME incoming;
-  unsigned long start = millis();
-
-  int expected_payload_length = 0;
-  int current_index = 0;
-  bool receiving_multiframe = false;
-
-  while ((millis() - start) < 500)
-  {
-    if (CAN0.read(incoming) != 0)
-    {
-      
-      // Filter: from ECU (0x600 | module_addr), data[0] == 0xF1 (addressed to us)
-      if (incoming.id == response_can_id && incoming.data.uint8[0] == 0xF1)
-      {
-        uint8_t pci = incoming.data.uint8[1];
-
-        // --- CASE 1: Single Frame ---
-        // Layout: [0xF1] [0x0N] [0x70] [id...] [option_echo] [Data...]
-        if ((pci & 0xF0) == 0x00)
-        {
-          if (incoming.data.uint8[2] == 0x70)
-          {
-            bool match = false;
-            uint8_t data_start = 0;
-
-            if (is_two_byte_id &&
-                incoming.data.uint8[3] == id_h &&
-                incoming.data.uint8[4] == id_l &&
-                incoming.data.uint8[5] == control_option)
-            {
-              match = true;
-              data_start = 6;
-            }
-            else if (!is_two_byte_id &&
-                     incoming.data.uint8[3] == id_l &&
-                     incoming.data.uint8[4] == control_option)
-            {
-              match = true;
-              data_start = 5;
-            }
-
-            if (match)
-            {
-              expected_payload_length = (pci & 0x0F) - (is_two_byte_id ? 4 : 3);
-
-              for (int i = 0; i < expected_payload_length && i < max_length; i++)
-              {
-                dest_buffer[i] = incoming.data.uint8[data_start + i];
-              }
-              return expected_payload_length;
-            }
-          }
-        }
-
-        // --- CASE 2: Multi-Frame First Frame ---
-        // Layout: [0xF1] [0x1N] [Len_L] [0x70] [id...] [option_echo] [Data...]
-        else if ((pci & 0xF0) == 0x10)
-        {
-          if (incoming.data.uint8[3] == 0x70)
-          {
-            bool match = false;
-            uint8_t data_start = 0;
-
-            if (is_two_byte_id &&
-                incoming.data.uint8[4] == id_h &&
-                incoming.data.uint8[5] == id_l &&
-                incoming.data.uint8[6] == control_option)
-            {
-              match = true;
-              data_start = 7;
-            }
-            else if (!is_two_byte_id &&
-                     incoming.data.uint8[4] == id_l &&
-                     incoming.data.uint8[5] == control_option)
-            {
-              match = true;
-              data_start = 6;
-            }
-
-            if (match)
-            {
-              receiving_multiframe = true;
-
-              expected_payload_length = (((pci & 0x0F) << 8) | incoming.data.uint8[2]) - (is_two_byte_id ? 4 : 3);
-
-              for (int i = data_start; i < 8; i++)
-              {
-                if (current_index < max_length)
-                {
-                  dest_buffer[current_index++] = incoming.data.uint8[i];
-                }
-              }
-
-              // Flow Control — send from tester (0x6F1) to ECU
-              CAN_FRAME flowControl;
-              flowControl.id            = 0x6F1;
-              flowControl.length        = 8;
-              flowControl.data.uint8[0] = module_addr; // target
-              flowControl.data.uint8[1] = 0x30;        // FC: ContinueToSend
-              flowControl.data.uint8[2] = 0x00;        // block size 0 = send all
-              flowControl.data.uint8[3] = 0x00;        // min separation time
-              for (int i = 4; i < 8; i++)
-                flowControl.data.uint8[i] = 0x00;
-              CAN0.sendFrame(flowControl);
-
-              start = millis();
-            }
-          }
-        }
-
-        // --- CASE 3: Multi-Frame Consecutive Frame ---
-        else if (receiving_multiframe && (pci & 0xF0) == 0x20)
-        {
-          for (int i = 2; i < 8; i++)
-          {
-            if (current_index < expected_payload_length && current_index < max_length)
-            {
-              dest_buffer[current_index++] = incoming.data.uint8[i];
-            }
-          }
-
-          if (current_index >= expected_payload_length)
-          {
-            return current_index; // SUCCESS
-          }
-        }
-        else if (!receiving_multiframe && (pci & 0xF0) == 0x20)
-        {
-          Serial.printf("[IOCtrl] WARNING: ConsecFrame arrived but no FirstFrame matched! pci=0x%02X\n", pci);
-        }
-      }
-      else if (incoming.id >= 0x600 && incoming.id <= 0x6FF)
-      {
-        // Other 0x6xx bus traffic — log so we can see what else is on the bus
-        Serial.printf("[IOCtrl] OTHER 0x6xx  ID=0x%03X  [0]=0x%02X  [1]=0x%02X\n",
-          incoming.id, incoming.data.uint8[0], incoming.data.uint8[1]);
-      }
-    }
-  }
-
-  return -1; // Timeout
 }
 
 int OBD2Class::pidRead(uint8_t mode, uint8_t pid, void *data, int length)
@@ -1084,8 +619,9 @@ int OBD2Class::pidRead(uint8_t mode, uint8_t pid, void *data, int length)
 
           // wait for (proper) response
           while (CAN0.read(incoming) != 0 || incoming.data.uint8[0] != (0x21 + pck))
-            ; // correct sequence number
-
+          {
+            delay(1);
+          }
           // Something recieved
           for (uint8_t i = 0; i < 7 && read < length; i++)
           {

@@ -123,7 +123,7 @@ enum
 // a multi‑frame response.  The stock code used 60 ms which is very
 // conservative; we can usually get away with 10–20 ms on Bosch/diesel
 // ECUs.  Keep this macro so it’s easy to tweak later.
-#define OBD2_FLOWCTRL_CHUNK_DELAY_MS 5 //10
+#define OBD2_FLOWCTRL_CHUNK_DELAY_MS 5 // 10
 
 enum BMW
 {
@@ -185,15 +185,6 @@ public:
   uint16_t pidBmwAB(uint16_t pid);
   uint32_t pidBmwABCD(uint16_t pid);
   uint32_t pidBmwRaw(uint16_t pid);
-
-  // This is related to BMW UDS DID
-  int readBmwUdsDid(uint8_t module_addr, uint16_t did, uint8_t *dest_buffer, int max_length);
-  // This is related to BMW KWP2000 DID
-  // Supports standard KWP2000 (1-byte PID) and BMW Two-Step KWP2000 (2-byte PID)
-int readBmwKwp2000(uint8_t module_addr, uint16_t pid, bool is_two_byte_pid, uint8_t *dest_buffer, int max_length);  // InputOutput control for BMW KWP2000
-  // Service 0x30: InputOutputControlByLocalIdentifier
-  // control_option: 0x00 (Return Control), 0x01 (Report State), 0x04 (Reset), 0x07 (Freeze), 0x08 (Adjust)
-  int ioControlBmwKwp2000(uint8_t module_addr, uint16_t local_id, bool is_two_byte_id, uint8_t control_option, uint8_t *dest_buffer, int max_length);
 
   String vinRead();
   String ecuNameRead();
