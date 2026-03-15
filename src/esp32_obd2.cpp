@@ -8,7 +8,7 @@
 #include "esp32_obd2.h"
 
 OBD2Class::OBD2Class() : _responseTimeout(OBD2_DEFAULT_TIMEOUT),
-                         _lastPidResponseMillis(0)
+                         _lastPidResponseMicros(0)
 {
 }
 
@@ -423,10 +423,13 @@ int OBD2Class::pidBmwRead(uint8_t mode, uint32_t pid, void *data, int length, ui
   if (response_id)
     *response_id = 0;
 
-  unsigned long lastResponseDelta = millis() - _lastPidResponseMillis;
-  if (lastResponseDelta < OBD2_MIN_REQUEST_GAP_MS)
+  // Sub-ms precision gap enforcement (avoids FreeRTOS tick overshoot)
+  unsigned long nowUs = micros();
+  unsigned long elapsedUs = nowUs - _lastPidResponseMicros;
+  unsigned long gapUs = (unsigned long)OBD2_MIN_REQUEST_GAP_MS * 1000UL;
+  if (elapsedUs < gapUs)
   {
-    delay(OBD2_MIN_REQUEST_GAP_MS - lastResponseDelta);
+    delayMicroseconds(gapUs - elapsedUs);
   }
 
   CAN_FRAME outgoing;
@@ -478,7 +481,7 @@ int OBD2Class::pidBmwRead(uint8_t mode, uint32_t pid, void *data, int length, ui
         continue;
       }
 
-      _lastPidResponseMillis = millis();
+      _lastPidResponseMicros = micros();
       if (!splitResponse && incoming.data.uint8[1] == (mode | 0x40) && incoming.data.uint8[2] == (uint8_t)(pid >> 16))
       {
         int available = (int)incoming.length - 3;
@@ -523,7 +526,7 @@ int OBD2Class::pidBmwRead(uint8_t mode, uint32_t pid, void *data, int length, ui
           }
           if (!frameReceived)
           {
-            _lastPidResponseMillis = millis();
+            _lastPidResponseMicros = micros();
             return read; // timeout waiting for next chunk
           }
 
@@ -539,7 +542,7 @@ int OBD2Class::pidBmwRead(uint8_t mode, uint32_t pid, void *data, int length, ui
           }
         }
 
-        _lastPidResponseMillis = millis();
+        _lastPidResponseMicros = micros();
         if (response_id)
           *response_id = incoming.id;
         return read;
@@ -551,12 +554,13 @@ int OBD2Class::pidBmwRead(uint8_t mode, uint32_t pid, void *data, int length, ui
 
 int OBD2Class::pidRead(uint8_t mode, uint8_t pid, void *data, int length)
 {
-  // we changed, from 60 to 10... our ECU is a bit faster
-  // make sure a minimal gap passes between successive requests
-  unsigned long lastResponseDelta = millis() - _lastPidResponseMillis;
-  if (lastResponseDelta < OBD2_MIN_REQUEST_GAP_MS)
+  // Sub-ms precision gap enforcement (avoids FreeRTOS tick overshoot)
+  unsigned long nowUs = micros();
+  unsigned long elapsedUs = nowUs - _lastPidResponseMicros;
+  unsigned long gapUs = (unsigned long)OBD2_MIN_REQUEST_GAP_MS * 1000UL;
+  if (elapsedUs < gapUs)
   {
-    delay(OBD2_MIN_REQUEST_GAP_MS - lastResponseDelta);
+    delayMicroseconds(gapUs - elapsedUs);
   }
 
   CAN_FRAME outgoing;
@@ -599,7 +603,7 @@ int OBD2Class::pidRead(uint8_t mode, uint8_t pid, void *data, int length)
         continue;
       }
 
-      _lastPidResponseMillis = millis();
+      _lastPidResponseMicros = micros();
 
       if (!splitResponse && incoming.data.uint8[1] == (mode | 0x40) && incoming.data.uint8[2] == pid)
       {
@@ -643,7 +647,7 @@ int OBD2Class::pidRead(uint8_t mode, uint8_t pid, void *data, int length)
           }
           if (!frameReceived)
           {
-            _lastPidResponseMillis = millis();
+            _lastPidResponseMicros = micros();
             return read; // timeout waiting for next chunk
           }
           // Something received
@@ -653,7 +657,7 @@ int OBD2Class::pidRead(uint8_t mode, uint8_t pid, void *data, int length)
           }
         }
 
-        _lastPidResponseMillis = millis();
+        _lastPidResponseMicros = micros();
         return read;
       }
     }

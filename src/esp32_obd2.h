@@ -4,6 +4,35 @@
 #ifndef ESP32_OBD2_H
 #define ESP32_OBD2_H
 
+// default timeout for a response in milliseconds
+// 25 ms works ok for most ECUs but we can shave a few ms for aggressive
+// polling.  The timeout can be changed at runtime via setTimeout().
+#ifndef OBD2_DEFAULT_TIMEOUT
+#define OBD2_DEFAULT_TIMEOUT 10
+#endif
+
+// minimum gap between successive requests (to avoid flooding the ECU)
+// the original library used 5 ms; modern ECUs respond faster so 1 ms is
+// usually safe.  Tune as needed for reliability.
+#ifndef OBD2_MIN_REQUEST_GAP_MS
+#define OBD2_MIN_REQUEST_GAP_MS 5
+#endif
+
+// delay inserted between consecutive flow‑control chunks when receiving
+// a multi‑frame response.  The stock code used 60 ms which is very
+// conservative; we can usually get away with 10–20 ms on Bosch/diesel
+// ECUs.  Keep this macro so it’s easy to tweak later.
+#ifndef OBD2_FLOWCTRL_CHUNK_DELAY_MS
+#define OBD2_FLOWCTRL_CHUNK_DELAY_MS 5
+#endif
+
+// timeout waiting for the next flow-control frame during multi-frame reads.
+// Some ECUs respond slowly; 1000 ms is safe, but you can reduce it to 100 ms
+// for faster operation if your ECU is responsive.
+#ifndef OBD2_FLOWCTRL_RESPONSE_TIMEOUT_MS
+#define OBD2_FLOWCTRL_RESPONSE_TIMEOUT_MS 100
+#endif
+
 enum
 {
   PIDS_SUPPORT_01_20 = 0x00,
@@ -109,27 +138,6 @@ enum
   // more PIDs can be added from: https://en.wikipedia.org/wiki/OBD-II_PIDs
 };
 
-// default timeout for a response in milliseconds
-// 25 ms works ok for most ECUs but we can shave a few ms for aggressive
-// polling.  The timeout can be changed at runtime via setTimeout().
-#define OBD2_DEFAULT_TIMEOUT 10
-
-// minimum gap between successive requests (to avoid flooding the ECU)
-// the original library used 5 ms; modern ECUs respond faster so 1 ms is
-// usually safe.  Tune as needed for reliability.
-#define OBD2_MIN_REQUEST_GAP_MS 5
-
-// delay inserted between consecutive flow‑control chunks when receiving
-// a multi‑frame response.  The stock code used 60 ms which is very
-// conservative; we can usually get away with 10–20 ms on Bosch/diesel
-// ECUs.  Keep this macro so it’s easy to tweak later.
-#define OBD2_FLOWCTRL_CHUNK_DELAY_MS 5 // 10
-
-// timeout waiting for the next flow-control frame during multi-frame reads.
-// Some ECUs respond slowly; 1000 ms is safe, but you can reduce it to 100 ms
-// for faster operation if your ECU is responsive.
-#define OBD2_FLOWCTRL_RESPONSE_TIMEOUT_MS 100
-
 enum BMW
 {
   ADV_ENGINE_RPM = 0x1881,
@@ -209,7 +217,7 @@ private:
 
 private:
   unsigned long _responseTimeout;
-  unsigned long _lastPidResponseMillis;
+  unsigned long _lastPidResponseMicros;
   uint32_t _supportedPids[32];
 };
 
