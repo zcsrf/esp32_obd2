@@ -125,6 +125,11 @@ enum
 // ECUs.  Keep this macro so it’s easy to tweak later.
 #define OBD2_FLOWCTRL_CHUNK_DELAY_MS 5 // 10
 
+// timeout waiting for the next flow-control frame during multi-frame reads.
+// Some ECUs respond slowly; 1000 ms is safe, but you can reduce it to 100 ms
+// for faster operation if your ECU is responsive.
+#define OBD2_FLOWCTRL_RESPONSE_TIMEOUT_MS 100
+
 enum BMW
 {
   ADV_ENGINE_RPM = 0x1881,
@@ -204,7 +209,6 @@ private:
 
 private:
   unsigned long _responseTimeout;
-  bool _useExtendedAddressing;
   unsigned long _lastPidResponseMillis;
   uint32_t _supportedPids[32];
 };

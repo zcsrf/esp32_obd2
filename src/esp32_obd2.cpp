@@ -7,8 +7,6 @@
 #include <esp32_can.h>
 #include "esp32_obd2.h"
 
-#define PROGMEM
-
 OBD2Class::OBD2Class() : _responseTimeout(OBD2_DEFAULT_TIMEOUT),
                          _lastPidResponseMillis(0)
 {
@@ -24,7 +22,8 @@ int OBD2Class::begin()
   {
     return 0;
   }
-  _useExtendedAddressing = true;
+  // Might be needed for some ECUs (BMW in particular) to respond to extended CAN IDs
+  // _useExtendedAddressing = true; // TODO: Implement extended addressing support if needed
 
   // Standard OBD2 response IDs
   CAN0.watchFor(0x7E8);
@@ -512,14 +511,23 @@ int OBD2Class::pidBmwRead(uint8_t mode, uint32_t pid, void *data, int length, ui
           // send the request for the next chunk
           outgoing.data.uint8[0] = 0x30;
           CAN0.sendFrame(outgoing);
-          // wait for (proper) response
-          while (CAN0.read(incoming) != 0 || incoming.data.uint8[0] != (0x21 + pck))
+          // wait for (proper) response with timeout
+          bool frameReceived = false;
+          for (unsigned long flowTimeout = millis(); (millis() - flowTimeout) < OBD2_FLOWCTRL_RESPONSE_TIMEOUT_MS; delay(1))
           {
-            delay(1);
-            // Serial.print(".");
-          }; // correct sequence number
+            if (CAN0.read(incoming) != 0 && incoming.data.uint8[0] == (0x21 + pck))
+            {
+              frameReceived = true;
+              break; // correct sequence number received
+            }
+          }
+          if (!frameReceived)
+          {
+            _lastPidResponseMillis = millis();
+            return read; // timeout waiting for next chunk
+          }
 
-          // Something recieved
+          // Something received
           for (uint8_t i = 0; i < 7 && read < length; i++)
           {
             ((uint8_t *)data)[read++] = incoming.data.uint8[i + 1];
@@ -585,6 +593,12 @@ int OBD2Class::pidRead(uint8_t mode, uint8_t pid, void *data, int length)
   {
     if (CAN0.read(incoming) != 0)
     {
+      // Make sure frame has enough bytes for the headers we access
+      if (incoming.length < 3)
+      {
+        continue;
+      }
+
       _lastPidResponseMillis = millis();
 
       if (!splitResponse && incoming.data.uint8[1] == (mode | 0x40) && incoming.data.uint8[2] == pid)
@@ -617,12 +631,22 @@ int OBD2Class::pidRead(uint8_t mode, uint8_t pid, void *data, int length)
           outgoing.data.uint8[0] = 0x30;
           CAN0.sendFrame(outgoing);
 
-          // wait for (proper) response
-          while (CAN0.read(incoming) != 0 || incoming.data.uint8[0] != (0x21 + pck))
+          // wait for (proper) response with timeout
+          bool frameReceived = false;
+          for (unsigned long flowTimeout = millis(); (millis() - flowTimeout) < OBD2_FLOWCTRL_RESPONSE_TIMEOUT_MS; delay(1))
           {
-            delay(1);
+            if (CAN0.read(incoming) != 0 && incoming.data.uint8[0] == (0x21 + pck))
+            {
+              frameReceived = true;
+              break; // correct sequence number received
+            }
           }
-          // Something recieved
+          if (!frameReceived)
+          {
+            _lastPidResponseMillis = millis();
+            return read; // timeout waiting for next chunk
+          }
+          // Something received
           for (uint8_t i = 0; i < 7 && read < length; i++)
           {
             ((uint8_t *)data)[read++] = incoming.data.uint8[i + 1];
